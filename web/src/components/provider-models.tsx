@@ -31,6 +31,7 @@ export function ProviderModels({
   headers,
   timeoutSecs,
   canList = true,
+  showFetch = true,
   hint,
 }: {
   /** null while the provider is being created and has no models yet. */
@@ -47,6 +48,8 @@ export function ProviderModels({
       credential that has not been proven yet has nothing to list from. The
       caller decides; typing an id by hand is never blocked. */
   canList?: boolean;
+  /** Whether the upstream exposes a usable model-list endpoint. */
+  showFetch?: boolean;
   /** Replaces the standard explanation — with why listing is unavailable, or
       with what the test already found. */
   hint?: string;
@@ -194,16 +197,18 @@ export function ProviderModels({
           <p className="text-sm font-medium">{t("providers.models")}</p>
           <p className="mt-0.5 text-xs text-muted-foreground">{hint ?? t("providers.modelsHint")}</p>
         </div>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={() => void openPicker()}
-          disabled={listing || busy || !baseURL || !canList}
-        >
-          {listing ? <Spinner /> : <ListPlus />}
-          {t("providers.fetchModels")}
-        </Button>
+        {showFetch && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => void openPicker()}
+            disabled={listing || busy || !baseURL || !canList}
+          >
+            {listing ? <Spinner /> : <ListPlus />}
+            {t("providers.fetchModels")}
+          </Button>
+        )}
       </div>
 
       {chips.length > 0 && (

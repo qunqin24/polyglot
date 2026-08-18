@@ -76,13 +76,8 @@ func TestGeminiDriverAgentPlatformExpressURL(t *testing.T) {
 	if got := req.Header.Get("x-goog-api-key"); got != "test-key" {
 		t.Errorf("x-goog-api-key = %q", got)
 	}
-	listReq, ok := (geminiDriver{}).ModelsRequest(context.Background(), target)
-	if !ok {
-		t.Fatal("Agent Platform model listing was reported unsupported")
-	}
-	wantList := "https://aiplatform.googleapis.com/v1/publishers/google/models?pageSize=1000"
-	if listReq.URL.String() != wantList {
-		t.Fatalf("models URL = %q, want %q", listReq.URL, wantList)
+	if _, ok := (geminiDriver{}).ModelsRequest(context.Background(), target); ok {
+		t.Fatal("Agent Platform model listing was reported supported")
 	}
 }
 
@@ -95,6 +90,9 @@ func TestGeminiDriverAgentPlatformProjectURL(t *testing.T) {
 	want := "https://aiplatform.googleapis.com/v1/projects/my-project/locations/global/publishers/google/models/gemini-3.5-pro:generateContent"
 	if req.URL.String() != want {
 		t.Fatalf("URL = %q, want %q", req.URL, want)
+	}
+	if _, ok := (geminiDriver{}).ModelsRequest(context.Background(), target); ok {
+		t.Fatal("Agent Platform model listing was reported supported")
 	}
 }
 

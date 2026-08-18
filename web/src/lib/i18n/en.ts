@@ -133,6 +133,8 @@ export const en = {
   "providers.agentPlatformProjectHint": "Required for Agent Platform Standard mode.",
   "providers.agentPlatformLocation": "Deployment location",
   "providers.agentPlatformLocationHint": "Optional. Defaults to global; for example us-central1, us, or eu.",
+  "providers.agentPlatformModelsHint":
+    "Agent Platform does not expose a compatible model list. Enter each model ID manually.",
   "providers.apiKeyHintEdit":
     "Leave blank to keep the stored credential. It is never sent back to the browser.",
   "providers.apiKeyHintNew": "Encrypted at rest and never shown again.",

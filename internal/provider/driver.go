@@ -319,6 +319,12 @@ func (geminiDriver) ChatRequest(ctx context.Context, t *Target, model string, bo
 }
 
 func (geminiDriver) ModelsRequest(ctx context.Context, t *Target) (*http.Request, bool) {
+	// Agent Platform's generateContent resource has no list method. Its Model
+	// Garden listing is a different API and API keys only authenticate the
+	// generation methods, so operators add Agent Platform model IDs manually.
+	if strings.Contains(strings.TrimRight(t.BaseURL, "/"), "/publishers/") {
+		return nil, false
+	}
 	req, err := newJSONRequest(ctx, http.MethodGet, joinURL(geminiBaseURL(t.BaseURL), "models?pageSize=1000"), nil)
 	if err != nil {
 		return nil, false

@@ -135,6 +135,8 @@ export const zh: Catalog = {
   "providers.agentPlatformProjectHint": "Agent Platform Standard 模式必填。",
   "providers.agentPlatformLocation": "部署区域",
   "providers.agentPlatformLocationHint": "可选，留空默认 global，例如 us-central1、us 或 eu。",
+  "providers.agentPlatformModelsHint":
+    "Agent Platform 不提供可兼容的模型列表接口，请手动输入模型 ID。",
   "providers.apiKeyHintEdit": "留空则保留已存储的凭证。它永远不会被回传到浏览器。",
   "providers.apiKeyHintNew": "加密存储，且不会再次显示。",
   "providers.customHeaders": "自定义请求头",

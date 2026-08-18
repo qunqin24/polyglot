@@ -80,6 +80,20 @@ function agentPlatformBaseURL(projectID: string, location: string): string {
   return `https://${host}/v1/projects/${project}/locations/${region}/publishers/google`;
 }
 
+function isAgentPlatformBaseURL(baseURL: string): boolean {
+  try {
+    const url = new URL(baseURL);
+    const agentPlatformHost =
+      url.hostname === "aiplatform.googleapis.com" ||
+      url.hostname.endsWith("-aiplatform.googleapis.com") ||
+      /^aiplatform\.(?:us|eu)\.rep\.googleapis\.com$/.test(url.hostname);
+    const path = url.pathname.replace(/\/+$/, "");
+    return agentPlatformHost && path.endsWith("/publishers/google");
+  } catch {
+    return false;
+  }
+}
+
 const emptyForm = {
   name: "",
   protocol: "openai" as ProtocolName,
@@ -409,10 +423,8 @@ export function Providers() {
 
 // ---------------------------------------------------------------------------
 // The dialog follows the order the work actually happens in: connect, verify,
-// then choose models. That order is not cosmetic — listing an upstream's
-// models is the same call the connection test makes, so a provider that has
-// not been tested has nothing to list from, and asking for models first only
-// produced a failure the operator had to translate back into "wrong key".
+// then choose models. Agent Platform skips verification because its generation
+// resource exposes neither a credential probe nor a compatible model list.
 // ---------------------------------------------------------------------------
 
 type HeaderParse =
@@ -500,16 +512,19 @@ function ProviderDialog({
   const parsed = parseHeaders(form.headers);
   const connection = [form.protocol, form.base_url, form.api_key, form.headers, form.timeout_secs].join(" ");
   const verdict = test !== null && testedConnection === connection ? test : null;
+  const agentPlatform = form.protocol === "gemini" && isAgentPlatformBaseURL(form.base_url);
 
   // A saved provider was already reachable once and its models are listed on
   // screen, so only a provider that does not exist yet has to prove itself
   // before the picker will open.
   const canList = provider !== null || verdict?.ok === true;
-  const modelsHint = canList
-    ? verdict?.ok
-      ? t("providers.listFromTest", { count: verdict.model_count ?? 0 })
-      : undefined
-    : t("providers.listNeedsTest");
+  const modelsHint = agentPlatform
+    ? t("providers.agentPlatformModelsHint")
+    : canList
+      ? verdict?.ok
+        ? t("providers.listFromTest", { count: verdict.model_count ?? 0 })
+        : undefined
+      : t("providers.listNeedsTest");
 
   // An empty key field on edit means "keep the stored credential".
   function keyValue(): string | null {
@@ -751,44 +766,46 @@ function ProviderDialog({
         {/* The button and its answer are one row. They used to be a sheet
             apart — the button pinned in the footer, the verdict at the end of
             the scrolling form — which took a scrollIntoView to paper over. */}
-        <Step n={2} title={t("providers.stepVerify")}>
-          <div className="flex flex-wrap items-center gap-3">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => void runTest()}
-              disabled={testing || !form.base_url}
-            >
-              {testing ? <Spinner /> : <Plug />} {t("providers.testConnection")}
-            </Button>
-            {verdict !== null && (
-              <div
-                className={cn(
-                  "flex min-w-0 flex-1 items-start gap-2 rounded-md border px-3 py-2 text-sm",
-                  verdict.ok
-                    ? "border-[--color-success]/30 bg-[--color-success]/8"
-                    : "border-destructive/30 bg-destructive/8 text-destructive",
-                )}
+        {!agentPlatform && (
+          <Step n={2} title={t("providers.stepVerify")}>
+            <div className="flex flex-wrap items-center gap-3">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => void runTest()}
+                disabled={testing || !form.base_url}
               >
-                {verdict.ok ? (
-                  <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-[--color-success]" />
-                ) : (
-                  <XCircle className="mt-0.5 size-4 shrink-0" />
-                )}
-                <p className="min-w-0 break-words">
-                  {verdict.ok
-                    ? t("providers.testOk", {
-                        latency: formatDuration(verdict.latency_ms),
-                        count: verdict.model_count ?? 0,
-                      })
-                    : verdict.error}
-                </p>
-              </div>
-            )}
-          </div>
-        </Step>
+                {testing ? <Spinner /> : <Plug />} {t("providers.testConnection")}
+              </Button>
+              {verdict !== null && (
+                <div
+                  className={cn(
+                    "flex min-w-0 flex-1 items-start gap-2 rounded-md border px-3 py-2 text-sm",
+                    verdict.ok
+                      ? "border-[--color-success]/30 bg-[--color-success]/8"
+                      : "border-destructive/30 bg-destructive/8 text-destructive",
+                  )}
+                >
+                  {verdict.ok ? (
+                    <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-[--color-success]" />
+                  ) : (
+                    <XCircle className="mt-0.5 size-4 shrink-0" />
+                  )}
+                  <p className="min-w-0 break-words">
+                    {verdict.ok
+                      ? t("providers.testOk", {
+                          latency: formatDuration(verdict.latency_ms),
+                          count: verdict.model_count ?? 0,
+                        })
+                      : verdict.error}
+                  </p>
+                </div>
+              )}
+            </div>
+          </Step>
+        )}
 
-        <Step n={3} title={t("providers.models")}>
+        <Step n={agentPlatform ? 2 : 3} title={t("providers.models")}>
           <ProviderModels
             provider={provider}
             picked={picked}
@@ -799,6 +816,7 @@ function ProviderDialog({
             headers={parsed.ok ? parsed.headers : {}}
             timeoutSecs={form.timeout_secs}
             canList={canList}
+            showFetch={!agentPlatform}
             hint={modelsHint}
           />
         </Step>
