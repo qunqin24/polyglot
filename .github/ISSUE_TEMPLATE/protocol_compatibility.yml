@@ -1,0 +1,118 @@
+name: Protocol compatibility / 协议兼容性
+description: Report a conversion, streaming, tool-use, or fidelity problem / 报告协议转换或保真问题
+title: "[Compatibility]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form when a request succeeds directly but fails, changes meaning, or loses fields through Polyglot. A minimal sanitized request is the fastest route to a fix.
+
+        当请求直连上游正常，但经过 Polyglot 后失败、语义改变或字段丢失时，请使用此表单。
+
+  - type: input
+    id: version
+    attributes:
+      label: Polyglot version / Polyglot 版本
+      placeholder: v0.1.0, preview-latest, or commit SHA
+    validations:
+      required: true
+
+  - type: dropdown
+    id: direction
+    attributes:
+      label: Conversion direction / 转换方向
+      description: Select the client protocol first and the upstream protocol second.
+      options:
+        - OpenAI -> OpenAI
+        - OpenAI -> OpenAI Responses
+        - OpenAI -> Anthropic
+        - OpenAI -> Gemini
+        - OpenAI Responses -> OpenAI
+        - OpenAI Responses -> OpenAI Responses
+        - OpenAI Responses -> Anthropic
+        - OpenAI Responses -> Gemini
+        - Anthropic -> OpenAI
+        - Anthropic -> OpenAI Responses
+        - Anthropic -> Anthropic
+        - Anthropic -> Gemini
+        - Gemini -> OpenAI
+        - Gemini -> OpenAI Responses
+        - Gemini -> Anthropic
+        - Gemini -> Gemini
+        - Gemini Interactions involved
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: client
+    attributes:
+      label: Client / 客户端
+      description: Name the application or SDK, version, endpoint, and protocol it sends.
+      placeholder: Claude Code x.y, POST /v1/messages, Anthropic protocol
+    validations:
+      required: true
+
+  - type: textarea
+    id: upstream
+    attributes:
+      label: Upstream / 上游
+      description: Name the provider, upstream protocol, model ID, and endpoint type.
+      placeholder: Google Gemini, Gemini protocol, gemini-..., streamGenerateContent
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: features
+    attributes:
+      label: Affected features / 受影响的能力
+      options:
+        - label: Non-streaming response / 非流式响应
+        - label: Streaming response / 流式响应
+        - label: Tool or function calling / 工具或函数调用
+        - label: Images, audio, or files / 图像、音频或文件
+        - label: Thinking or reasoning / 思考或推理
+        - label: Structured output / 结构化输出
+        - label: Provider-native tools / 供应商内置工具
+        - label: Usage or cost metadata / 用量或成本数据
+
+  - type: textarea
+    id: request
+    attributes:
+      label: Minimal sanitized request / 最小脱敏请求
+      description: Include headers only when they affect behavior. Replace all credentials and private content.
+      render: json
+    validations:
+      required: true
+
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed response or fidelity loss / 实际响应或保真损失
+      description: Include the error, changed field, missing event, or unexpected wire behavior.
+    validations:
+      required: true
+
+  - type: textarea
+    id: direct
+    attributes:
+      label: Direct-upstream comparison / 直连上游对比
+      description: Explain what happens when the equivalent request is sent directly to the provider.
+
+  - type: textarea
+    id: fidelity_notes
+    attributes:
+      label: Polyglot fidelity notes and request ID / 保真记录与请求 ID
+      description: Copy the relevant WebUI log details after removing private data.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks / 提交检查
+      options:
+        - label: I confirmed the equivalent direct-upstream request behaves differently, when possible. / 在可行时，我已确认等价的直连上游请求表现不同。
+          required: true
+        - label: I removed all credentials and private data. / 我已删除所有凭证和私密数据。
+          required: true

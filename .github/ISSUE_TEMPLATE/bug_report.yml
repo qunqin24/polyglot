@@ -1,0 +1,96 @@
+name: Bug report / 缺陷报告
+description: Report reproducible incorrect behavior in Polyglot / 报告可复现的异常行为
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Polyglot. Please remove API keys, authorization headers, prompts, and other sensitive data before submitting.
+
+        感谢你帮助改进 Polyglot。提交前请删除 API 密钥、鉴权请求头、提示词和其他敏感信息。
+
+  - type: input
+    id: version
+    attributes:
+      label: Polyglot version / Polyglot 版本
+      description: Use the WebUI version, Docker tag, release tag, or commit SHA.
+      placeholder: v0.1.0, preview-latest, or c8b5597
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment / 部署方式
+      options:
+        - Docker Hub image
+        - GitHub Container Registry image
+        - Release binary
+        - Built from source
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment / 运行环境
+      description: Include OS, CPU architecture, browser or client SDK, and relevant versions.
+      placeholder: Ubuntu 24.04, linux/arm64, Docker 28; OpenAI Python SDK 2.x
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened? / 发生了什么？
+      description: Describe the observed behavior and any user-visible error.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior / 预期行为
+      description: What should Polyglot have done instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce / 复现步骤
+      description: Provide the smallest reliable sequence that triggers the issue.
+      placeholder: |
+        1. Add a provider using ...
+        2. Register model ...
+        3. Send a request to ...
+        4. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: protocol_path
+    attributes:
+      label: Protocol path / 协议路径
+      description: If relevant, identify the client protocol and upstream protocol, provider, and model.
+      placeholder: OpenAI Responses client -> Gemini upstream -> Google Gemini -> gemini-...
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized logs or request ID / 脱敏日志或请求 ID
+      description: Paste only the relevant excerpt. Never include credentials or private prompt content.
+      render: shell
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks / 提交检查
+      options:
+        - label: I searched existing issues and did not find the same report. / 我已搜索现有 Issue，没有找到相同报告。
+          required: true
+        - label: I removed API keys, tokens, authorization headers, and private data. / 我已删除密钥、Token、鉴权请求头和私密数据。
+          required: true

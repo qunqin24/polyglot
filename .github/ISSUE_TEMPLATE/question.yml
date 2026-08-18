@@ -1,0 +1,45 @@
+name: Question / 使用问题
+description: Ask about setup, configuration, or expected behavior / 询问安装、配置或预期行为
+title: "[Question]: "
+labels:
+  - question
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Share enough context to understand the setup, but never post API keys, tokens, authorization headers, or private prompts.
+
+        请提供理解环境所需的上下文，但不要发布 API 密钥、Token、鉴权请求头或私密提示词。
+
+  - type: textarea
+    id: question
+    attributes:
+      label: Question / 问题
+      description: What are you trying to understand or accomplish?
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context / 上下文
+      description: Include Polyglot version, deployment method, client, provider, protocol, and model when relevant.
+      placeholder: v0.1.0 via Docker; Claude Code client; OpenAI protocol upstream...
+    validations:
+      required: true
+
+  - type: textarea
+    id: attempted
+    attributes:
+      label: What have you tried? / 已尝试的方法
+      description: Include relevant documentation or configuration you already checked.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks / 提交检查
+      options:
+        - label: I checked the README and searched existing issues. / 我已查看 README 并搜索现有 Issue。
+          required: true
+        - label: I removed all credentials and private data. / 我已删除所有凭证和私密数据。
+          required: true

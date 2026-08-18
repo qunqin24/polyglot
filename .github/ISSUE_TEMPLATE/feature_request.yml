@@ -1,0 +1,73 @@
+name: Feature request / 功能建议
+description: Propose an improvement that fits a personal AI gateway / 建议符合个人 AI 网关定位的改进
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Polyglot is a single-operator protocol gateway, not a billing or multi-tenant platform. Describe the problem first so the smallest useful solution can be considered.
+
+        Polyglot 是单管理员的协议网关，不是计费或多租户平台。请先描述问题，便于评估最小可用方案。
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area / 方向
+      options:
+        - Protocol compatibility
+        - Provider support
+        - Routing and reliability
+        - Models and aliases
+        - Usage, cost, or observability
+        - WebUI
+        - Deployment and operations
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / 要解决的问题
+      description: What workflow is difficult or impossible today? Who encounters it and how often?
+    validations:
+      required: true
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome / 期望结果
+      description: Describe the behavior you want, without requiring a particular implementation.
+    validations:
+      required: true
+
+  - type: textarea
+    id: example
+    attributes:
+      label: Example workflow or API shape / 示例流程或 API 形式
+      description: A concrete request, UI flow, or configuration example makes the scope easier to judge.
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered / 已考虑的替代方案
+      description: How do you solve or work around the problem today?
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Why this belongs in Polyglot / 为什么适合 Polyglot
+      description: Explain how it supports protocol compatibility or a personal AI gateway.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks / 提交检查
+      options:
+        - label: I searched existing issues and did not find the same request. / 我已搜索现有 Issue，没有找到相同建议。
+          required: true
+        - label: This request does not require Polyglot to become a billing or multi-tenant platform. / 该建议不要求 Polyglot 变成计费或多租户平台。
+          required: true
