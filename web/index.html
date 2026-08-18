@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Polyglot</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#fdfdfd" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0c0c0e" />
+    <script>
+      // Apply the saved theme and language before first paint, so neither
+      // flashes and the document reports the right lang from the start.
+      (function () {
+        try {
+          var t = localStorage.getItem("polyglot-theme") || "system";
+          var dark = t === "dark" || (t === "system" &&
+            window.matchMedia("(prefers-color-scheme: dark)").matches);
+          if (dark) document.documentElement.classList.add("dark");
+
+          var stored = localStorage.getItem("polyglot-locale");
+          var lang = stored === "zh" ? "zh-CN" : stored === "en" ? "en" : null;
+          if (!lang) {
+            var prefs = navigator.languages || [navigator.language || "en"];
+            for (var i = 0; i < prefs.length && !lang; i++) {
+              var p = (prefs[i] || "").toLowerCase();
+              if (p.indexOf("zh") === 0) lang = "zh-CN";
+              else if (p.indexOf("en") === 0) lang = "en";
+            }
+          }
+          document.documentElement.lang = lang || "en";
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,21 @@
+-- Per-provider opt-out from replaying unrecognised request fields.
+--
+-- Polyglot now carries the fields a codec did not recognise and puts them back
+-- when the request leaves through the protocol it arrived on, so a provider's
+-- own parameters — OpenRouter's `provider`, vLLM's `guided_json`, DeepSeek's
+-- `prefix` — survive instead of being dropped without a note.
+--
+-- That is right for almost every upstream, so it is the default. The exception
+-- is an upstream that validates strictly and rejects members it does not know:
+-- there, forwarding a field the client sent turns a request that used to work
+-- into a 400. Such a provider gets strict_fields, and Polyglot then reports the
+-- fields as unsupported instead of sending them.
+--
+-- The column names the exception rather than the rule so that "off" is the
+-- default in the database, in the API and in a zero-valued Go struct at once.
+-- A flag whose safe default is its zero value cannot be forgotten into the
+-- wrong behaviour by a caller that does not know it exists.
+--
+-- It is a provider setting rather than a global one because strictness is a
+-- property of the upstream, not of this installation.
+ALTER TABLE providers ADD COLUMN strict_fields INTEGER NOT NULL DEFAULT 0;

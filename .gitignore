@@ -1,0 +1,17 @@
+bin/
+data/
+node_modules/
+.pnpm-store/
+.eslintcache
+*.tsbuildinfo
+*.db
+*.db-wal
+*.db-shm
+secret.key
+.DS_Store
+.env
+
+# The WebUI bundle is a build artifact. Only .gitkeep is tracked, so the
+# go:embed directive still resolves on a fresh clone.
+web/dist/*
+!web/dist/.gitkeep

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Polyglot">
+  <title>Polyglot</title>
+  <style>
+    .tile { fill: #23459d }
+    .mark { fill: #ffffff }
+    @media (prefers-color-scheme: dark) {
+      .tile { fill: #79a1fc }
+      .mark { fill: #101a3a }
+    }
+  </style>
+  <rect class="tile" fill="#23459d" width="64" height="64" rx="14" />
+  <path class="mark" fill="#ffffff" d="M28 16H18a6 6 0 0 0-6 6v20a6 6 0 0 0 6 6h10z" />
+  <path class="mark" fill="#ffffff" d="M35 15a17 17 0 0 1 0 34z" />
+</svg>

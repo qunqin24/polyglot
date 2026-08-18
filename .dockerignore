@@ -1,0 +1,12 @@
+.git
+.github
+bin/
+data/
+web/node_modules
+web/.pnpm-store
+web/dist
+*.db
+*.db-wal
+*.db-shm
+secret.key
+README.md

@@ -1,0 +1,11 @@
+-- A note on a provider, for whatever the name could not hold.
+--
+-- The name has a job: it is what "provider::model" resolves against and what
+-- every log row and picker shows, so it stays short and stable. That leaves
+-- nowhere to record why this provider exists — whose account pays for it, what
+-- it is meant to serve, when the trial credit runs out — and an operator with
+-- six OpenAI-compatible upstreams needs somewhere to put that.
+--
+-- Metadata only: nothing reads it but the operator. Routing, pricing and the
+-- request path never see this column.
+ALTER TABLE providers ADD COLUMN note TEXT NOT NULL DEFAULT '';
