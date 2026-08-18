@@ -67,20 +67,37 @@ one person's traffic, and everything it does serves that scope.
 
 ### Docker (recommended)
 
+Run the stable image directly from Docker Hub:
+
 ```bash
+docker volume create polyglot-data
+docker run -d \
+  --name polyglot \
+  --restart unless-stopped \
+  -p 127.0.0.1:3000:3000 \
+  -v polyglot-data:/data \
+  qunqin45/polyglot:latest
+
+# Read the one-time first-run credential.
+docker exec polyglot cat /data/setup.token
+```
+
+Then open <http://localhost:3000>, enter the setup token, and create the
+administrator. The token is deleted immediately after setup succeeds.
+
+For Docker Compose:
+
+```bash
+mkdir polyglot && cd polyglot
+curl -fsSLO https://raw.githubusercontent.com/qunqin24/polyglot/main/docker-compose.yml
+docker compose pull
 docker compose up -d
+docker compose exec polyglot cat /data/setup.token
 ```
 
-Tagged releases are published to GitHub Container Registry and Docker Hub as
-one multi-architecture image for `linux/amd64` and `linux/arm64`:
-
-```bash
-docker pull ghcr.io/qunqin24/polyglot:latest
-docker pull DOCKERHUB_USERNAME/polyglot:latest
-```
-
-`latest` always means the newest stable release. `preview-latest` is a separate
-channel and never replaces `latest`.
+The same multi-architecture image supports `linux/amd64` and `linux/arm64` and
+is mirrored at `ghcr.io/qunqin24/polyglot:latest`. `latest` always means the
+newest stable release; `preview-latest` is separate and never replaces it.
 
 ### Binary
 
@@ -89,10 +106,9 @@ make build
 DATA_DIR=./data ./bin/polyglot
 ```
 
-Open <http://localhost:3000>. On first run, read the one-time credential from
-`data/setup.token` (or set `POLYGLOT_SETUP_TOKEN`) and enter it in the setup
-form. Create an administrator, add a provider, then create an API key. The
-token file is deleted as soon as the administrator is created.
+Open <http://localhost:3000>. On a binary install, read the one-time credential
+from `data/setup.token` (or set `POLYGLOT_SETUP_TOKEN`) and enter it in the
+setup form. Create an administrator, add a provider, then create an API key.
 
 ### First provider
 

@@ -1,14 +1,13 @@
 # Everything Polyglot needs. No Redis, no Postgres, no Nginx.
 services:
   polyglot:
-    build: .
-    image: polyglot:latest
+    image: qunqin45/polyglot:latest
     container_name: polyglot
     restart: unless-stopped
     ports:
       - "127.0.0.1:3000:3000"
     volumes:
-      - ./data:/data
+      - polyglot-data:/data
     environment:
       # Uncomment to change where request logs are pruned from.
       # LOG_RETENTION_DAYS: "30"
@@ -16,3 +15,7 @@ services:
       # Ollama or vLLM.
       # BLOCK_PRIVATE_UPSTREAM: "true"
       LOG_LEVEL: "info"
+
+volumes:
+  polyglot-data:
+    name: polyglot-data

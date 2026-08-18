@@ -64,19 +64,37 @@ Polyglot 不是上述工具的超集。它没有计费、没有多租户、没�
 
 ### Docker（推荐）
 
+直接运行 Docker Hub 上的正式版镜像：
+
 ```bash
+docker volume create polyglot-data
+docker run -d \
+  --name polyglot \
+  --restart unless-stopped \
+  -p 127.0.0.1:3000:3000 \
+  -v polyglot-data:/data \
+  qunqin45/polyglot:latest
+
+# 读取一次性首次安装口令
+docker exec polyglot cat /data/setup.token
+```
+
+随后打开 <http://localhost:3000>，输入安装口令并创建管理员。初始化成功后口令会立即
+失效并从数据卷删除。
+
+使用 Docker Compose：
+
+```bash
+mkdir polyglot && cd polyglot
+curl -fsSLO https://raw.githubusercontent.com/qunqin24/polyglot/main/docker-compose.yml
+docker compose pull
 docker compose up -d
+docker compose exec polyglot cat /data/setup.token
 ```
 
-带标签的版本会同时发布到 GitHub Container Registry 和 Docker Hub；同一个多架构
-镜像支持 `linux/amd64` 和 `linux/arm64`：
-
-```bash
-docker pull ghcr.io/qunqin24/polyglot:latest
-docker pull DOCKERHUB_USERNAME/polyglot:latest
-```
-
-`latest` 永远指向最新正式版；`preview-latest` 是独立的预览通道，不会覆盖正式版。
+同一个镜像支持 `linux/amd64` 和 `linux/arm64`，并镜像到
+`ghcr.io/qunqin24/polyglot:latest`。`latest` 永远指向最新正式版；
+`preview-latest` 是独立的预览通道，不会覆盖正式版。
 
 ### 二进制
 
@@ -85,9 +103,9 @@ make build
 DATA_DIR=./data ./bin/polyglot
 ```
 
-打开 <http://localhost:3000>。首次运行时，从 `data/setup.token` 读取一次性安装口令
-（也可以设置 `POLYGLOT_SETUP_TOKEN`），在初始化表单中输入。创建管理员后该口令文件
-会立即删除；随后添加供应商并创建 API Key 即可。
+打开 <http://localhost:3000>。使用二进制部署时，从 `data/setup.token` 读取一次性安装
+口令（也可以设置 `POLYGLOT_SETUP_TOKEN`），在初始化表单中输入。随后添加供应商并创
+建 API Key 即可。
 
 ### 第一个供应商
 
