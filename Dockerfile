@@ -2,7 +2,7 @@
 # The result is one container, one process, one SQLite file.
 
 # --- stage 1: build the WebUI ------------------------------------------------
-FROM node:22-alpine AS web
+FROM --platform=$BUILDPLATFORM node:22-alpine AS web
 
 # corepack ships with the image and pins the pnpm version from package.json.
 RUN corepack enable
@@ -17,7 +17,7 @@ COPY web/ ./
 RUN pnpm run typecheck && pnpm run lint && pnpm run build
 
 # --- stage 2: build the binary ----------------------------------------------
-FROM golang:1.26.6-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.26.6-alpine AS build
 
 WORKDIR /src
 
@@ -30,8 +30,10 @@ COPY --from=web /web/dist ./web/dist
 
 ARG VERSION=dev
 ARG COMMIT=unknown
+ARG TARGETOS
+ARG TARGETARCH
 # CGO stays off: the SQLite driver is pure Go, so the binary is fully static.
-RUN CGO_ENABLED=0 go build -trimpath \
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath \
     -ldflags "-s -w \
       -X github.com/qunqin24/polyglot/internal/version.Version=${VERSION} \
       -X github.com/qunqin24/polyglot/internal/version.Commit=${COMMIT}" \

@@ -10,6 +10,10 @@ on:
         description: Existing vX.Y.Z or vX.Y.Z-preview.N tag to publish
         required: true
         type: string
+      source_ref:
+        description: Source ref to build; defaults to the release tag
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -28,7 +32,7 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.release_tag || github.ref }}
+          ref: ${{ inputs.source_ref || inputs.release_tag || github.ref }}
           persist-credentials: false
 
       - name: Resolve release channel and image name
