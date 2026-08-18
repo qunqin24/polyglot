@@ -68,12 +68,12 @@ Polyglot 不是上述工具的超集。它没有计费、没有多租户、没�
 docker compose up -d
 ```
 
-带标签的版本还会发布到 GitHub Container Registry；同一个多架构镜像同时支持
-`linux/amd64` 和 `linux/arm64`：
+带标签的版本会同时发布到 GitHub Container Registry 和 Docker Hub；同一个多架构
+镜像支持 `linux/amd64` 和 `linux/arm64`：
 
 ```bash
-docker pull ghcr.io/OWNER/REPOSITORY:latest
-docker pull ghcr.io/OWNER/REPOSITORY:preview-latest
+docker pull ghcr.io/qunqin24/polyglot:latest
+docker pull DOCKERHUB_USERNAME/polyglot:latest
 ```
 
 `latest` 永远指向最新正式版；`preview-latest` 是独立的预览通道，不会覆盖正式版。
@@ -644,8 +644,10 @@ docker build -t polyglot:latest .
 
 ### 发布 Docker 版本
 
-推送 SemVer Git tag 会触发 `.github/workflows/docker-release.yml`，并发布到
-`ghcr.io/<owner>/<repository>`：
+推送 SemVer Git tag 会触发 `.github/workflows/docker-release.yml`，将相同标签同时发布
+到 `ghcr.io/qunqin24/polyglot` 和
+`docker.io/<DOCKERHUB_USERNAME>/polyglot`。请先配置仓库 Secrets：
+`DOCKERHUB_USERNAME` 与 `DOCKERHUB_TOKEN`。
 
 | Git tag | 发布的镜像 tag |
 |---|---|
@@ -663,7 +665,8 @@ git push origin v1.3.0-preview.1
 ```
 
 工作流会构建并冒烟验证 AMD64 与 ARM64 两个版本，然后发布包含 SBOM 和 provenance
-证明的共享 manifest。`vX.Y.Z` 和 `vX.Y.Z-preview.N` 之外的标签会被拒绝。
+证明的共享 manifest。`vX.Y.Z` 和 `vX.Y.Z-preview.N` 之外的标签会被拒绝。手动触发
+还可以补发已有标签，无需移动标签。
 
 ## 命令行
 

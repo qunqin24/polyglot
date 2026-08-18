@@ -71,12 +71,12 @@ one person's traffic, and everything it does serves that scope.
 docker compose up -d
 ```
 
-Tagged releases are also published to GitHub Container Registry as one
-multi-architecture image for `linux/amd64` and `linux/arm64`:
+Tagged releases are published to GitHub Container Registry and Docker Hub as
+one multi-architecture image for `linux/amd64` and `linux/arm64`:
 
 ```bash
-docker pull ghcr.io/OWNER/REPOSITORY:latest
-docker pull ghcr.io/OWNER/REPOSITORY:preview-latest
+docker pull ghcr.io/qunqin24/polyglot:latest
+docker pull DOCKERHUB_USERNAME/polyglot:latest
 ```
 
 `latest` always means the newest stable release. `preview-latest` is a separate
@@ -703,7 +703,9 @@ Multi-stage: Node builds the UI, Go builds the binary, Alpine runs it.
 ### Publishing Docker releases
 
 Pushing a SemVer Git tag starts `.github/workflows/docker-release.yml` and
-publishes to `ghcr.io/<owner>/<repository>`:
+publishes the same tags to `ghcr.io/qunqin24/polyglot` and
+`docker.io/<DOCKERHUB_USERNAME>/polyglot`. Configure the repository secrets
+`DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` first.
 
 | Git tag | Published image tags |
 |---|---|
@@ -722,7 +724,8 @@ git push origin v1.3.0-preview.1
 
 The workflow builds and smoke-tests both AMD64 and ARM64 variants, then
 publishes a shared manifest with SBOM and provenance attestations. Tags outside
-`vX.Y.Z` and `vX.Y.Z-preview.N` are rejected.
+`vX.Y.Z` and `vX.Y.Z-preview.N` are rejected. A manual dispatch can republish
+an existing tag without moving it.
 
 ## Command line
 
