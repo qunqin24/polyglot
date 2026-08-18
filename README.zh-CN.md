@@ -71,7 +71,7 @@ docker volume create polyglot-data
 docker run -d \
   --name polyglot \
   --restart unless-stopped \
-  -p 127.0.0.1:3000:3000 \
+  -p 3000:3000 \
   -v polyglot-data:/data \
   qunqin45/polyglot:latest
 
@@ -79,8 +79,9 @@ docker run -d \
 docker exec polyglot cat /data/setup.token
 ```
 
-随后打开 <http://localhost:3000>，输入安装口令并创建管理员。初始化成功后口令会立即
-失效并从数据卷删除。
+随后打开 `http://服务器IP:3000`，输入安装口令并创建管理员。初始化成功后口令会立即
+失效并从数据卷删除。请在服务器防火墙中只向需要访问的网络放行 TCP 3000 端口。如果同一台服务器上已有
+Nginx、Caddy 等反向代理，则应改用 `127.0.0.1:3000:3000`，只对外暴露反向代理。
 
 使用 Docker Compose：
 
@@ -91,6 +92,9 @@ docker compose pull
 docker compose up -d
 docker compose exec polyglot cat /data/setup.token
 ```
+
+容器启动后打开 `http://服务器IP:3000`。Compose 文件默认将 3000 端口发布到服务器外部；
+面向公网部署时，请通过防火墙限制访问，或放在启用 TLS 的反向代理后面。
 
 同一个镜像支持 `linux/amd64` 和 `linux/arm64`，并镜像到
 `ghcr.io/qunqin24/polyglot:latest`。`latest` 永远指向最新正式版；

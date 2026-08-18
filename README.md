@@ -74,7 +74,7 @@ docker volume create polyglot-data
 docker run -d \
   --name polyglot \
   --restart unless-stopped \
-  -p 127.0.0.1:3000:3000 \
+  -p 3000:3000 \
   -v polyglot-data:/data \
   qunqin45/polyglot:latest
 
@@ -82,8 +82,11 @@ docker run -d \
 docker exec polyglot cat /data/setup.token
 ```
 
-Then open <http://localhost:3000>, enter the setup token, and create the
-administrator. The token is deleted immediately after setup succeeds.
+Then open `http://SERVER_IP:3000`, enter the setup token, and create the
+administrator. The token is deleted immediately after setup succeeds. Allow
+TCP port 3000 through the server firewall only for the networks that need it.
+If Nginx, Caddy, or another reverse proxy runs on the same server, publish
+`127.0.0.1:3000:3000` instead and expose only the proxy.
 
 For Docker Compose:
 
@@ -94,6 +97,10 @@ docker compose pull
 docker compose up -d
 docker compose exec polyglot cat /data/setup.token
 ```
+
+Open `http://SERVER_IP:3000` after the container starts. The Compose file
+publishes port 3000 on the server by default; restrict it with the firewall or
+put it behind a TLS reverse proxy for Internet-facing deployments.
 
 The same multi-architecture image supports `linux/amd64` and `linux/arm64` and
 is mirrored at `ghcr.io/qunqin24/polyglot:latest`. `latest` always means the

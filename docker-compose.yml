@@ -5,7 +5,9 @@ services:
     container_name: polyglot
     restart: unless-stopped
     ports:
-      - "127.0.0.1:3000:3000"
+      # Expose the WebUI on the server's network interfaces. If a reverse
+      # proxy runs on this host, bind to 127.0.0.1:3000:3000 instead.
+      - "3000:3000"
     volumes:
       - polyglot-data:/data
     environment:
