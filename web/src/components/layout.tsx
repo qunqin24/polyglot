@@ -89,23 +89,25 @@ export function Layout({ children }: { children: React.ReactNode }) {
           ))}
         </nav>
 
-        <div className="flex items-center justify-between gap-2 border-t border-border p-3">
-          <div className="min-w-0">
-            <p className="truncate text-xs font-medium">{me.username}</p>
-            <p className="truncate text-xs text-muted-foreground">v{me.version}</p>
-          </div>
-          <div className="flex items-center gap-1">
-            <LocaleToggle />
-            <ThemeToggle />
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              onClick={() => void signOut()}
-              title={t("common.signOut")}
-            >
-              <LogOut />
-              <span className="sr-only">{t("common.signOut")}</span>
-            </Button>
+        <div className="p-3">
+          <div className="flex items-center justify-between gap-2 rounded-lg border border-border bg-card px-3 py-2">
+            <div className="min-w-0">
+              <p className="truncate text-xs font-medium">{me.username}</p>
+              <p className="truncate text-xs text-muted-foreground">v{me.version}</p>
+            </div>
+            <div className="flex items-center gap-0.5">
+              <LocaleToggle />
+              <ThemeToggle />
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={() => void signOut()}
+                title={t("common.signOut")}
+              >
+                <LogOut />
+                <span className="sr-only">{t("common.signOut")}</span>
+              </Button>
+            </div>
           </div>
         </div>
       </aside>
