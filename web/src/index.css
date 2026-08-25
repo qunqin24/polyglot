@@ -170,6 +170,24 @@
   animation: polyglot-in 0.18s ease-out;
 }
 
+/* A toast is docked to the top edge, so it settles downward into place.
+   animate-in-soft rises from below, which at the top of the screen reads as
+   arriving from the wrong side. */
+@keyframes polyglot-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.animate-toast-in {
+  animation: polyglot-toast-in 0.18s ease-out;
+}
+
 /* A side panel slides from the edge it is docked to, and slides back out —
    otherwise it appears to teleport over the page it belongs to. Radix keeps
    the element mounted for the closing animation on its own. */
@@ -227,6 +245,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .animate-in-soft,
+  .animate-toast-in,
   .animate-sheet[data-state="open"],
   .animate-sheet[data-state="closed"],
   .animate-overlay[data-state="open"],
