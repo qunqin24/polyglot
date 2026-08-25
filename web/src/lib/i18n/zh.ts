@@ -386,6 +386,7 @@ export const zh: Catalog = {
   "keys.tryItNoModel": "请先添加供应商并挑选模型，这个示例会自动使用其中之一。",
   "keys.copyFailed": "无法访问剪贴板 —— 请手动复制密钥。",
   "keys.copyKey": "复制密钥",
+  "keys.nameTaken": "已经有一把密钥叫「{name}」了，给这把换个名字吧。",
   "keys.notRevealable": "这把密钥创建于 Polyglot 留存副本之前，复制不了，只剩下前缀。",
   "keys.deleteTitle": "删除「{name}」？",
   "keys.deleteDescription": "仍在使用该密钥的客户端会立即开始收到 401。",

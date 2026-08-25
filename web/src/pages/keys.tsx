@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Copy, KeyRound, Plus, Trash2, Check, ChevronRight, MapPin, Pencil, RotateCcw, SlidersHorizontal } from "lucide-react";
-import { api, type APIKey, type APIKeyPolicyInput, type BudgetPeriod, type KeyOrigin, type OfferedModel } from "@/lib/api";
+import { api, ApiError, type APIKey, type APIKeyPolicyInput, type BudgetPeriod, type KeyOrigin, type OfferedModel } from "@/lib/api";
 import { copyToClipboard, errorMessage, useAsync } from "@/lib/hooks";
 import { useT, type TFunction } from "@/lib/i18n";
 import { cn, formatRelative, formatTime, formatUSD } from "@/lib/utils";
@@ -240,6 +240,7 @@ export function Keys() {
       <KeyDialog
         open={creating || editing !== null}
         apiKey={editing}
+        existingNames={(data ?? []).map((k) => k.name)}
         onOpenChange={(open) => {
           if (!open) {
             setCreating(false);
@@ -481,14 +482,34 @@ function modelsText(policy: PolicyForm, t: TFunction): string {
     : t("keys.modelsAll");
 }
 
+/**
+ * freeName picks the first unused variant of a default name: "API key", then
+ * "API key 2". The name is built here rather than on the server so it stays in
+ * the operator's language.
+ */
+function freeName(base: string, taken: string[]): string {
+  const used = new Set(taken);
+  if (!used.has(base)) return base;
+  for (let n = 2; n < 1000; n++) {
+    const candidate = `${base} ${n}`;
+    if (!used.has(candidate)) return candidate;
+  }
+  return base;
+}
+
 function KeyDialog({
   open,
   apiKey,
+  existingNames,
   onOpenChange,
   onSaved,
 }: {
   open: boolean;
   apiKey: APIKey | null;
+  /** Names already in use. Two keys called the same thing make both the list
+   *  and the request log unreadable, so the server rejects a duplicate; this
+   *  is here so an unnamed key gets a free name instead of an error. */
+  existingNames: string[];
   onOpenChange: (o: boolean) => void;
   onSaved: () => void;
 }) {
@@ -503,7 +524,6 @@ function KeyDialog({
   const [adjusting, setAdjusting] = React.useState(false);
   const [issued, setIssued] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
-  const [error, setError] = React.useState("");
   // What the key has spent this window. Local, because resetting it changes
   // the number without saving the form.
   const [spent, setSpent] = React.useState(0);
@@ -550,7 +570,6 @@ function KeyDialog({
     setAdjusting(false);
     setIssued(null);
     setSpent(apiKey?.spent_usd ?? 0);
-    setError("");
   }, [open, apiKey, t]);
 
   // Resetting starts a new total window at once, rather than on save: it is
@@ -563,7 +582,7 @@ function KeyDialog({
       toast(t("keys.budgetReset", { name: apiKey.name }));
       onSaved();
     } catch (e) {
-      setError(errorMessage(e));
+      toast(errorMessage(e), "error");
     }
   }
 
@@ -582,26 +601,37 @@ function KeyDialog({
     // key with nothing picked would silently be the opposite of what it says.
     if (policy.restrictModels && policy.allowedModels.length === 0) {
       setAdjusting(true);
-      setError(t("keys.modelsPickedEmpty"));
+      toast(t("keys.modelsPickedEmpty"), "error");
       return;
     }
+    // A name the operator typed is used as typed, and a clash is reported. One
+    // the form filled in from a purpose is only a suggestion, so it steps
+    // aside for a name already in use rather than failing the save.
+    const typed = name.trim();
+    const chosen = typed || t("keys.defaultName");
+    const finalName = nameTouched && typed ? chosen : freeName(chosen, existingNames);
     setBusy(true);
-    setError("");
     try {
       const input = policyInput(policy);
       if (apiKey) {
-        await api.updateKey(apiKey.id, { name: name.trim(), enabled: apiKey.enabled, policy: input });
+        await api.updateKey(apiKey.id, { name: finalName, enabled: apiKey.enabled, policy: input });
         onSaved();
         onOpenChange(false);
       } else {
-        const res = await api.createKey(name.trim() || t("keys.defaultName"), input);
-        // The list refreshes behind the sheet; the sheet stays open, because
-        // this is the only time the secret exists.
+        const res = await api.createKey(finalName, input);
+        // The list refreshes behind the sheet; the sheet stays open so the
+        // operator can take the key without hunting for it.
         onSaved();
         setIssued(res.secret);
       }
     } catch (err) {
-      setError(errorMessage(err));
+      // A duplicate name is the one failure the operator can fix on the spot,
+      // so it gets said in their language instead of relayed from the server.
+      if (err instanceof ApiError && err.status === 409) {
+        toast(t("keys.nameTaken", { name: finalName }), "error");
+      } else {
+        toast(errorMessage(err), "error");
+      }
     } finally {
       setBusy(false);
     }
@@ -700,8 +730,6 @@ function KeyDialog({
               onReset={apiKey ? () => void resetBudget() : undefined}
             />
           )}
-
-          <ErrorBanner message={error} />
         </form>
       )}
     </Sheet>

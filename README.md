@@ -441,8 +441,8 @@ is displayed as a share of tokens, not requests.
 
 Create and manage Polyglot API keys. A key is authenticated against a SHA-256
 hash and also kept encrypted at rest, so the list can copy a key back to your
-clipboard instead of making you delete it and rebuild its settings. Each key
-shows the addresses it has been used
+clipboard instead of making you delete it and rebuild its settings. Names are
+unique. Each key shows the addresses it has been used
 from, busiest first — a key suddenly used from a new address is visible here.
 
 Optional per-key limits: requests per minute, tokens per day, and a spending

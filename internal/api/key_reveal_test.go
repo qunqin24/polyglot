@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -89,5 +90,77 @@ func TestRevealingAKeyNeedsTheAdminSession(t *testing.T) {
 		if _, ok := out["secret"]; ok {
 			t.Fatal("an unauthenticated response carried the secret")
 		}
+	}
+}
+
+// Two keys called the same thing make both the list and the request log's
+// api_key_name column unreadable, so a duplicate is refused rather than
+// silently accepted.
+func TestKeyNamesAreUnique(t *testing.T) {
+	h := newHarness(t, func(http.ResponseWriter, *http.Request) {}, "openai")
+	c := h.adminSession(t)
+
+	var first struct {
+		Key struct {
+			ID int64 `json:"id"`
+		} `json:"key"`
+	}
+	c.send(t, http.MethodPost, "/api/keys", map[string]any{"name": "laptop"}, &first)
+
+	body, _ := json.Marshal(map[string]any{"name": "laptop"})
+	resp := c.do(t, http.MethodPost, "/api/keys", bytes.NewReader(body))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		out, _ := io.ReadAll(resp.Body)
+		t.Fatalf("creating a second \"laptop\" = %d, want 409: %s", resp.StatusCode, out)
+	}
+
+	// Renaming a key onto a taken name is refused the same way.
+	var second struct {
+		Key struct {
+			ID int64 `json:"id"`
+		} `json:"key"`
+	}
+	c.send(t, http.MethodPost, "/api/keys", map[string]any{"name": "desktop"}, &second)
+
+	rename, _ := json.Marshal(map[string]any{"name": "laptop", "enabled": true})
+	resp2 := c.do(t, http.MethodPut, "/api/keys/"+itoa(second.Key.ID), bytes.NewReader(rename))
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusConflict {
+		out, _ := io.ReadAll(resp2.Body)
+		t.Fatalf("renaming onto a taken name = %d, want 409: %s", resp2.StatusCode, out)
+	}
+
+	// A key keeps its own name: renaming to what it already is, is not a clash.
+	keep, _ := json.Marshal(map[string]any{"name": "desktop", "enabled": true})
+	resp3 := c.do(t, http.MethodPut, "/api/keys/"+itoa(second.Key.ID), bytes.NewReader(keep))
+	defer resp3.Body.Close()
+	if resp3.StatusCode != http.StatusOK {
+		out, _ := io.ReadAll(resp3.Body)
+		t.Fatalf("renaming a key to its own name = %d, want 200: %s", resp3.StatusCode, out)
+	}
+}
+
+// A key created with no name gets a free one picked for it. Refusing a blank
+// field the operator deliberately left blank would be a worse answer.
+func TestAnUnnamedKeyGetsAFreeDefaultName(t *testing.T) {
+	h := newHarness(t, func(http.ResponseWriter, *http.Request) {}, "openai")
+	c := h.adminSession(t)
+
+	seen := map[string]bool{}
+	for range 3 {
+		var out struct {
+			Key struct {
+				Name string `json:"name"`
+			} `json:"key"`
+		}
+		c.send(t, http.MethodPost, "/api/keys", map[string]any{}, &out)
+		if out.Key.Name == "" {
+			t.Fatal("an unnamed key was created with no name at all")
+		}
+		if seen[out.Key.Name] {
+			t.Fatalf("two unnamed keys were both called %q", out.Key.Name)
+		}
+		seen[out.Key.Name] = true
 	}
 }

@@ -476,6 +476,11 @@ exist here. Do not document an exporter that has not been written.
   clipboard rather than printing it on screen, so it never sits in a
   screenshot. Keys created before migration 0017 have no ciphertext and report
   `revealable: false`; that is a fact about the past, not a state to repair.
+- API key names are unique (migration 0018). The name is what tells two keys
+  apart in the list and in `request_logs.api_key_name`, so a duplicate makes
+  both unreadable. A duplicate is a 409; a key created with no name gets a free
+  default picked for it, because refusing a field the operator deliberately
+  left blank is a worse answer.
 - **Strip upstream credentials from every error path** before it reaches a
   client or a log (`redact` / `redactSecret`). There is a test for this.
 - Request logs record metadata only. **Never store prompts or completions.**

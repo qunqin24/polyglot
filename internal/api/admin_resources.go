@@ -630,6 +630,27 @@ func (s *Server) handleResetKeyBudget(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, fresh)
 }
 
+// freeKeyName picks the first unused default name: "API key", then "API key
+// 2", and so on. The gateway has one operator and a handful of keys, so
+// counting up is cheaper than any scheme that would avoid it.
+func (s *Server) freeKeyName(ctx context.Context) (string, error) {
+	const base = "API key"
+	for n := 1; n < 1000; n++ {
+		name := base
+		if n > 1 {
+			name = fmt.Sprintf("%s %d", base, n)
+		}
+		taken, err := s.store.APIKeyNameTaken(ctx, name, 0)
+		if err != nil {
+			return "", err
+		}
+		if !taken {
+			return name, nil
+		}
+	}
+	return "", fmt.Errorf("no unused default key name is left; name this key yourself")
+}
+
 // handleCreateKey returns the plaintext key. The row keeps a hash to
 // authenticate against and a ciphertext, so handleRevealKey can show it again
 // to the operator who owns it.
@@ -642,18 +663,39 @@ func (s *Server) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid request body: %v", err)
 		return
 	}
-	name := strings.TrimSpace(in.Name)
-	if name == "" {
-		name = "API key"
-	}
 	policy, msg := in.Policy.policy()
 	if msg != "" {
 		writeErr(w, http.StatusBadRequest, "%s", msg)
 		return
 	}
+	// An operator who typed a name that is already taken gets told so. One who
+	// typed nothing gets a free default picked for them, because "you must
+	// name it" is a worse answer to a field they deliberately left blank.
+	name := strings.TrimSpace(in.Name)
+	if name == "" {
+		var err error
+		if name, err = s.freeKeyName(r.Context()); err != nil {
+			writeErr(w, http.StatusInternalServerError, "%v", err)
+			return
+		}
+	} else {
+		taken, err := s.store.APIKeyNameTaken(r.Context(), name, 0)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, "%v", err)
+			return
+		}
+		if taken {
+			writeErr(w, http.StatusConflict, "a key named %q already exists; names are unique so the key list and the request log can tell two keys apart", name)
+			return
+		}
+	}
 	plaintext, prefix := auth.NewAPIKey()
 	key, err := s.store.CreateAPIKeyWithPolicy(r.Context(), name, prefix, plaintext, policy)
 	if err != nil {
+		if isUniqueViolation(err) {
+			writeErr(w, http.StatusConflict, "a key named %q already exists; names are unique so the key list and the request log can tell two keys apart", name)
+			return
+		}
 		writeErr(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
@@ -723,6 +765,15 @@ func (s *Server) handleUpdateKey(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, "name is required")
 			return
 		}
+		taken, err := s.store.APIKeyNameTaken(r.Context(), name, id)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, "%v", err)
+			return
+		}
+		if taken {
+			writeErr(w, http.StatusConflict, "a key named %q already exists; names are unique so the key list and the request log can tell two keys apart", name)
+			return
+		}
 	}
 	enabled := existing.Enabled
 	if in.Enabled != nil {
@@ -739,6 +790,10 @@ func (s *Server) handleUpdateKey(w http.ResponseWriter, r *http.Request) {
 	}
 	key, err := s.store.UpdateAPIKey(r.Context(), id, name, enabled, policy)
 	if err != nil {
+		if isUniqueViolation(err) {
+			writeErr(w, http.StatusConflict, "a key named %q already exists; names are unique so the key list and the request log can tell two keys apart", name)
+			return
+		}
 		writeErr(w, storeErrStatus(err), "%v", err)
 		return
 	}

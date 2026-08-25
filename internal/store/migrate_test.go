@@ -274,3 +274,57 @@ func TestTheSupersededTTFBColumnIsGone(t *testing.T) {
 		}
 	}
 }
+
+// Key names became unique in 0018. A database written before that may hold
+// duplicates, and the operator must not lose a key over it: the later ones are
+// renamed, never deleted, because a renamed key keeps working and a deleted
+// one starts returning 401s to whoever still holds it.
+func TestDuplicateKeyNamesAreRenamedNotDeleted(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "polyglot.db")
+	old := openAtMigration(t, path, "0017_api_key_secret.sql")
+
+	now := time.Now().Unix()
+	for i, hash := range []string{"hash-a", "hash-b", "hash-c"} {
+		if _, err := old.Exec(
+			`INSERT INTO api_keys (name, prefix, secret_hash, enabled, created_at)
+			 VALUES ('laptop', ?, ?, 1, ?)`,
+			fmt.Sprintf("pg_dup%d", i), hash, now); err != nil {
+			t.Fatalf("insert duplicate key %d: %v", i, err)
+		}
+	}
+	if err := old.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	st, err := Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("upgrading a database with duplicate key names failed: %v", err)
+	}
+	defer st.Close()
+
+	keys, err := st.ListAPIKeys(context.Background())
+	if err != nil {
+		t.Fatalf("list keys: %v", err)
+	}
+	if len(keys) != 3 {
+		t.Fatalf("got %d keys after the upgrade, want all 3 kept", len(keys))
+	}
+	names := map[string]bool{}
+	for _, k := range keys {
+		if names[k.Name] {
+			t.Errorf("two keys are still called %q", k.Name)
+		}
+		names[k.Name] = true
+	}
+	if !names["laptop"] {
+		t.Error("the first key was renamed; only the later duplicates should be")
+	}
+
+	// And every one of them still authenticates, which is the point of keeping
+	// them: the rename touched the name and nothing else.
+	for _, hash := range []string{"hash-a", "hash-b", "hash-c"} {
+		if _, err := st.APIKeyByHash(context.Background(), hash); err != nil {
+			t.Errorf("key %s no longer authenticates after the rename: %v", hash, err)
+		}
+	}
+}

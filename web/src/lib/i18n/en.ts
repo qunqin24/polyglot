@@ -397,6 +397,7 @@ export const en = {
   "keys.tryItNoModel": "Add a provider and pick a model first — this example will then use one of them.",
   "keys.copyFailed": "Could not access the clipboard — copy the key manually.",
   "keys.copyKey": "Copy the key",
+  "keys.nameTaken": "You already have a key called \u201c{name}\u201d. Give this one a different name.",
   "keys.notRevealable":
     "This key was created before Polyglot kept a recoverable copy, so it cannot be copied — only its prefix is left.",
   "keys.deleteTitle": 'Delete "{name}"?',

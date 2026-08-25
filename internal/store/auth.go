@@ -515,6 +515,17 @@ func (s *Store) UpdateAPIKey(ctx context.Context, id int64, name string, enabled
 	return s.GetAPIKey(ctx, id)
 }
 
+// APIKeyNameTaken reports whether another key already answers to this name.
+// exceptID is the key being renamed, which does not count against itself.
+func (s *Store) APIKeyNameTaken(ctx context.Context, name string, exceptID int64) (bool, error) {
+	var n int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM api_keys WHERE name = ? AND id <> ?`, name, exceptID).Scan(&n); err != nil {
+		return false, fmt.Errorf("check api key name: %w", err)
+	}
+	return n > 0, nil
+}
+
 func (s *Store) SetAPIKeyEnabled(ctx context.Context, id int64, enabled bool) error {
 	res, err := s.db.ExecContext(ctx, `UPDATE api_keys SET enabled = ? WHERE id = ?`, boolInt(enabled), id)
 	if err != nil {
