@@ -37,13 +37,30 @@ func TestTheClientAddressIsLogged(t *testing.T) {
 	}
 }
 
-// The one that matters. Without TRUST_PROXY_HEADERS, a caller setting
-// X-Forwarded-For must not be able to choose what the log says — otherwise
-// whoever stole the key simply writes someone else's address into it.
-func TestAForgedForwardedHeaderCannotChooseTheLoggedAddress(t *testing.T) {
+// The default. Polyglot is normally behind a reverse proxy, and the address
+// that proxy forwards is the only one worth logging.
+func TestAForwardedHeaderIsHonouredByDefault(t *testing.T) {
 	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, okChatResponse)
 	}, "openai")
+
+	readAll(t, h.post("/v1/chat/completions",
+		`{"model":"my-model","messages":[{"role":"user","content":"hi"}]}`,
+		map[string]string{"X-Forwarded-For": "203.0.113.7"}))
+
+	log := h.waitForLog(t)
+	if log.ClientIP != "203.0.113.7" {
+		t.Errorf("client_ip = %q, want the address the proxy reported", log.ClientIP)
+	}
+}
+
+// TRUST_PROXY_HEADERS=false is for a deployment whose port can be reached
+// without going through the proxy. There the header is a caller talking about
+// itself, and the log ignores it.
+func TestAForgedForwardedHeaderIsIgnoredWhenTrustIsOff(t *testing.T) {
+	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, okChatResponse)
+	}, "openai", withConfig(func(c *config.Config) { c.TrustProxyHeaders = false }))
 
 	readAll(t, h.post("/v1/chat/completions",
 		`{"model":"my-model","messages":[{"role":"user","content":"hi"}]}`,
@@ -54,25 +71,8 @@ func TestAForgedForwardedHeaderCannotChooseTheLoggedAddress(t *testing.T) {
 
 	log := h.waitForLog(t)
 	if strings.Contains(log.ClientIP, "203.0.113") {
-		t.Fatalf("a forged header set the logged address to %q; "+
-			"the log cannot be trusted to spot a stolen key", log.ClientIP)
-	}
-}
-
-// With a proxy in front and the operator saying so, the header is the only way
-// to see the real caller, so it is honoured.
-func TestAForwardedHeaderIsHonouredWhenTheOperatorSaysThereIsAProxy(t *testing.T) {
-	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
-		io.WriteString(w, okChatResponse)
-	}, "openai", withConfig(func(c *config.Config) { c.TrustProxyHeaders = true }))
-
-	readAll(t, h.post("/v1/chat/completions",
-		`{"model":"my-model","messages":[{"role":"user","content":"hi"}]}`,
-		map[string]string{"X-Forwarded-For": "203.0.113.7"}))
-
-	log := h.waitForLog(t)
-	if log.ClientIP != "203.0.113.7" {
-		t.Errorf("client_ip = %q, want the address the proxy reported", log.ClientIP)
+		t.Fatalf("a forged header set the logged address to %q "+
+			"even with TRUST_PROXY_HEADERS off", log.ClientIP)
 	}
 }
 

@@ -59,7 +59,10 @@ type Config struct {
 	MaxMediaBytes int64
 
 	// TrustProxyHeaders makes client IP resolution honour X-Forwarded-For.
-	// Only enable behind a reverse proxy you control.
+	// On by default: Polyglot is normally run behind a reverse proxy, and
+	// without it every address in the request log is the proxy's own, which
+	// answers none of the questions the log is kept for. Turn it off when the
+	// port is reachable without going through that proxy.
 	TrustProxyHeaders bool
 
 	// SecureCookies forces the Secure flag on the admin session cookie.
@@ -89,7 +92,7 @@ func Load() (*Config, error) {
 		MaxUpstreamBytes:   64 << 20,
 		UpstreamTimeout:    10 * time.Minute,
 		LogRetentionDays:   30,
-		TrustProxyHeaders:  envBool("TRUST_PROXY_HEADERS", false),
+		TrustProxyHeaders:  envBool("TRUST_PROXY_HEADERS", true),
 		FetchRemoteMedia:   envBool("FETCH_REMOTE_MEDIA", false),
 		MaxMediaBytes:      media.DefaultMaxBytes,
 		Dev:                envBool("POLYGLOT_DEV", false),

@@ -490,6 +490,17 @@ exist here. Do not document an exporter that has not been written.
 - Keep the input size limits, upstream response caps and timeouts.
 - Validate provider base URLs (scheme, no embedded credentials). Never follow a
   cross-host redirect with the auth header attached.
+- `TRUST_PROXY_HEADERS` is **on by default**: `X-Forwarded-For` sets the
+  address in `request_logs.client_ip`. Polyglot is normally run behind a
+  reverse proxy, and without this every row records the proxy's own address,
+  which answers none of the questions the log is kept for. The cost is stated
+  rather than hidden: on a deployment whose port is reachable without going
+  through that proxy, a caller can set the header and choose what the log says
+  about them. `TRUST_PROXY_HEADERS=false` restores the peer address and is the
+  right setting for exactly that deployment. Do not add a second place that
+  re-reads forwarding headers — `middleware.RealIP` resolves the address once,
+  and the log, the rate limiter and the key origins page all read the result.
+
 ## Scope / Non-Goals
 
 **Do not add infrastructure:** Redis, PostgreSQL, MySQL, Kafka, RabbitMQ,

@@ -250,11 +250,11 @@ func (g *Gateway) healthy(cands []router.Resolution, d *canonical.Diagnostics) [
 
 // clientIP is the address the request came from, without the port.
 //
-// It is r.RemoteAddr — the actual TCP peer — unless TRUST_PROXY_HEADERS is on,
-// in which case the RealIP middleware has already replaced it with the value a
-// trusted proxy supplied. Anything a client can set for itself must not end up
-// here: a forgeable address in the log would answer the "has my key leaked"
-// question with whatever the intruder preferred.
+// It is whatever r.RemoteAddr holds by the time the request gets here: the
+// address a proxy forwarded, unless TRUST_PROXY_HEADERS is off, in which case
+// it is the TCP peer. Resolving that once in a middleware, rather than
+// re-reading headers here, is what keeps the log, the rate limiter and the key
+// origins page talking about the same caller.
 func clientIP(r *http.Request) string {
 	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
 		return host

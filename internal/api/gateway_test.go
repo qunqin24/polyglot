@@ -94,6 +94,8 @@ func newHarness(t *testing.T, upstreamHandler http.HandlerFunc, protocolName str
 		MaxUpstreamBytes: 1 << 20,
 		UpstreamTimeout:  10 * time.Second,
 		Telemetry:        hc.telemetry,
+		// Matches config.Load's default, so a test sees what an install does.
+		TrustProxyHeaders: true,
 	}
 	if hc.tweak != nil {
 		hc.tweak(cfg)

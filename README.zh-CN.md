@@ -466,7 +466,7 @@ Node.js。自动检测浏览器语言（中文和英文），也可在侧边栏�
 | `PUBLIC_URL` | — | 填 `https://` 值会打开 Secure Cookie |
 | `SECURE_COOKIES` | `false` | 不设 `PUBLIC_URL` 也强制 Secure Cookie |
 | `BLOCK_PRIVATE_UPSTREAM` | `false` | 拒绝私网地址的供应商 |
-| `TRUST_PROXY_HEADERS` | `false` | 信任 `X-Forwarded-For` |
+| `TRUST_PROXY_HEADERS` | `true` | 信任 `X-Forwarded-For`；如果端口不经代理也能访问，关掉它 |
 | `POLYGLOT_SECRET_KEY` | — | 覆盖 `$DATA_DIR/secret.key` |
 | `POLYGLOT_SETUP_TOKEN` | `$DATA_DIR/setup.token` | 覆盖一次性首次安装口令 |
 | `FETCH_REMOTE_MEDIA` | `false` | 为不获取 URL 的上游下载客户端链接的图片 |

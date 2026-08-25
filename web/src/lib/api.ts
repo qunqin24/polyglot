@@ -226,8 +226,8 @@ export interface RequestLog {
   upstream_model: string;
   api_key_id: number | null;
   api_key_name: string;
-  /** The address the request came from. Trustworthy unless a proxy sits in
-   *  front without TRUST_PROXY_HEADERS set. */
+  /** The address the request came from — the one a reverse proxy forwarded,
+   *  unless TRUST_PROXY_HEADERS is off. */
   client_ip: string;
   /** What made the call: an app title, a referring host, or the client
    *  software. Empty when the caller identified nothing. */

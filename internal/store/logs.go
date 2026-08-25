@@ -37,8 +37,9 @@ type RequestLog struct {
 	UpstreamModel    string   `json:"upstream_model"`
 	APIKeyID         *int64   `json:"api_key_id"`
 	APIKeyName       string   `json:"api_key_name"`
-	// ClientIP is the address the request came from. It is the peer address
-	// unless TRUST_PROXY_HEADERS says a proxy in front may set it.
+	// ClientIP is the address the request came from: the one a reverse proxy
+	// forwarded, unless TRUST_PROXY_HEADERS is off, in which case it is the
+	// TCP peer.
 	ClientIP string `json:"client_ip"`
 	// ClientApp names what made the call — an app title, a referring site, or
 	// the client software. It answers "what was this for", which no other

@@ -503,7 +503,7 @@ else lives in the database and is managed through the WebUI.
 | `PUBLIC_URL` | — | `https://` value enables Secure cookies |
 | `SECURE_COOKIES` | `false` | Forces Secure cookies without `PUBLIC_URL` |
 | `BLOCK_PRIVATE_UPSTREAM` | `false` | Refuse providers on private IPs |
-| `TRUST_PROXY_HEADERS` | `false` | Honour `X-Forwarded-For` |
+| `TRUST_PROXY_HEADERS` | `true` | Honour `X-Forwarded-For`; turn off if the port is reachable without the proxy |
 | `POLYGLOT_SECRET_KEY` | — | Override `$DATA_DIR/secret.key` |
 | `POLYGLOT_SETUP_TOKEN` | `$DATA_DIR/setup.token` | Override the one-time first-run credential |
 | `FETCH_REMOTE_MEDIA` | `false` | Download client-linked images for non-fetching upstreams |

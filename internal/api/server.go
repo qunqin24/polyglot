@@ -95,11 +95,8 @@ func NewServer(st *store.Store, cfg *config.Config, log *slog.Logger, ul *usage.
 
 func (s *Server) Handler() http.Handler {
 	r := chi.NewRouter()
-	// X-Forwarded-For is honoured only when the operator has said there is a
-	// proxy in front. Trusting it unconditionally would let any caller choose
-	// the address that reaches the request log, which would defeat the one
-	// thing that log is kept for: noticing a key being used from somewhere it
-	// should not be.
+	// X-Forwarded-For decides the client address unless the operator turned
+	// TRUST_PROXY_HEADERS off. See the field's comment for the trade.
 	if s.cfg.TrustProxyHeaders {
 		r.Use(middleware.RealIP)
 	}

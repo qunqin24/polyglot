@@ -67,7 +67,7 @@ var settings = []setting{
 			}
 			return ""
 		}},
-	{"TRUST_PROXY_HEADERS", "false", "Honour X-Forwarded-For — only behind a proxy you control",
+	{"TRUST_PROXY_HEADERS", "true", "Honour X-Forwarded-For; turn off if the port is reachable without the proxy",
 		func(c *config.Config) string { return fmt.Sprint(c.TrustProxyHeaders) }, nil},
 	{"BLOCK_PRIVATE_UPSTREAM", "false", "Refuse providers on private IPs; leave off for a local Ollama",
 		func(*config.Config) string { return fmt.Sprint(os.Getenv("BLOCK_PRIVATE_UPSTREAM") == "true") }, nil},
