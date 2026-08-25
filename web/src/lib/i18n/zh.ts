@@ -545,6 +545,10 @@ export const zh: Catalog = {
   // --- settings -------------------------------------------------------------
   "settings.title": "设置",
   "settings.description": "当前部署。",
+  "settings.tabGeneral": "通用",
+  "settings.tabInstance": "实例",
+  "settings.tabAccount": "账户",
+  "settings.tabEndpoints": "接口",
   "settings.instance": "实例",
   "settings.instanceDescription": "由环境变量配置，修改后需重启生效。",
   "settings.version": "版本",

@@ -564,6 +564,10 @@ export const en = {
   // --- settings -------------------------------------------------------------
   "settings.title": "Settings",
   "settings.description": "This install.",
+  "settings.tabGeneral": "General",
+  "settings.tabInstance": "Instance",
+  "settings.tabAccount": "Account",
+  "settings.tabEndpoints": "Endpoints",
   "settings.instance": "Instance",
   "settings.instanceDescription": "Configured by environment variables; restart to change them.",
   "settings.version": "Version",

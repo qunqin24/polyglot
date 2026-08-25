@@ -15,7 +15,15 @@ import { PageHeader } from "@/components/layout";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Field, Input } from "@/components/ui/input";
-import { ErrorBanner, Select, Spinner } from "@/components/ui/misc";
+import {
+  ErrorBanner,
+  Select,
+  Spinner,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/misc";
 import { useToast } from "@/components/ui/toast";
 import { UpdateSettings } from "@/components/update-notice";
 
@@ -29,39 +37,15 @@ export function Settings() {
     <>
       <PageHeader title={t("settings.title")} description={t("settings.description")} />
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>{t("settings.instance")}</CardTitle>
-            <CardDescription>{t("settings.instanceDescription")}</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <dl className="space-y-3 text-sm">
-              <Row label={t("settings.version")} value={me.version} mono />
-              <Row label={t("settings.dataDir")} value={me.data_dir} mono />
-              <Row label={t("settings.upstreamTimeout")} value={me.upstream_timeout} mono />
-              <Row
-                label={t("settings.logRetention")}
-                value={
-                  me.log_retention > 0
-                    ? t("settings.retentionDays", { days: me.log_retention })
-                    : t("settings.retentionForever")
-                }
-              />
-              <Row
-                label={t("settings.droppedLogs")}
-                value={me.dropped_logs > 0 ? String(me.dropped_logs) : t("common.none")}
-              />
-              <Row label={t("settings.administrator")} value={me.username} />
-              <Row label={t("common.created")} value={formatTime(me.created_at)} />
-            </dl>
-            <div className="mt-5 border-t border-border pt-5">
-              <UpdateSettings />
-            </div>
-          </CardContent>
-        </Card>
+      <Tabs defaultValue="general">
+        <TabsList className="mb-4">
+          <TabsTrigger value="general">{t("settings.tabGeneral")}</TabsTrigger>
+          <TabsTrigger value="instance">{t("settings.tabInstance")}</TabsTrigger>
+          <TabsTrigger value="account">{t("settings.tabAccount")}</TabsTrigger>
+          <TabsTrigger value="endpoints">{t("settings.tabEndpoints")}</TabsTrigger>
+        </TabsList>
 
-        <div className="space-y-4">
+        <TabsContent value="general">
           <Card>
             <CardHeader>
               <CardTitle>{t("settings.appearance")}</CardTitle>
@@ -92,33 +76,70 @@ export function Settings() {
               </div>
             </CardContent>
           </Card>
+        </TabsContent>
 
+        <TabsContent value="instance">
+          <Card>
+            <CardHeader>
+              <CardTitle>{t("settings.instance")}</CardTitle>
+              <CardDescription>{t("settings.instanceDescription")}</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <dl className="space-y-3 text-sm">
+                <Row label={t("settings.version")} value={me.version} mono />
+                <Row label={t("settings.dataDir")} value={me.data_dir} mono />
+                <Row label={t("settings.upstreamTimeout")} value={me.upstream_timeout} mono />
+                <Row
+                  label={t("settings.logRetention")}
+                  value={
+                    me.log_retention > 0
+                      ? t("settings.retentionDays", { days: me.log_retention })
+                      : t("settings.retentionForever")
+                  }
+                />
+                <Row
+                  label={t("settings.droppedLogs")}
+                  value={me.dropped_logs > 0 ? String(me.dropped_logs) : t("common.none")}
+                />
+                <Row label={t("settings.administrator")} value={me.username} />
+                <Row label={t("common.created")} value={formatTime(me.created_at)} />
+              </dl>
+              <div className="mt-5 border-t border-border pt-5">
+                <UpdateSettings />
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="account">
           <PasswordCard onChanged={() => void signOut()} />
-        </div>
-      </div>
+        </TabsContent>
 
-      <Card className="mt-4">
-        <CardHeader>
-          <CardTitle>{t("settings.endpoints")}</CardTitle>
-          <CardDescription>{t("settings.endpointsDescription")}</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-2 text-sm">
-          <Endpoint method="POST" path="/v1/chat/completions" label={t("settings.endpointOpenAIChat")} />
-          <Endpoint method="POST" path="/v1/responses" label={t("settings.endpointResponses")} />
-          <Endpoint method="GET" path="/v1/models" label={t("settings.endpointModels")} />
-          <Endpoint method="POST" path="/v1/messages" label={t("settings.endpointAnthropic")} />
-          <Endpoint
-            method="POST"
-            path="/v1beta/models/{model}:generateContent"
-            label={t("settings.endpointGeminiGenerate")}
-          />
-          <Endpoint
-            method="POST"
-            path="/v1beta/models/{model}:streamGenerateContent"
-            label={t("settings.endpointGeminiStream")}
-          />
-        </CardContent>
-      </Card>
+        <TabsContent value="endpoints">
+          <Card>
+            <CardHeader>
+              <CardTitle>{t("settings.endpoints")}</CardTitle>
+              <CardDescription>{t("settings.endpointsDescription")}</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2 text-sm">
+              <Endpoint method="POST" path="/v1/chat/completions" label={t("settings.endpointOpenAIChat")} />
+              <Endpoint method="POST" path="/v1/responses" label={t("settings.endpointResponses")} />
+              <Endpoint method="GET" path="/v1/models" label={t("settings.endpointModels")} />
+              <Endpoint method="POST" path="/v1/messages" label={t("settings.endpointAnthropic")} />
+              <Endpoint
+                method="POST"
+                path="/v1beta/models/{model}:generateContent"
+                label={t("settings.endpointGeminiGenerate")}
+              />
+              <Endpoint
+                method="POST"
+                path="/v1beta/models/{model}:streamGenerateContent"
+                label={t("settings.endpointGeminiStream")}
+              />
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
     </>
   );
 }
