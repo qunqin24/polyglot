@@ -428,19 +428,6 @@ export interface TestResult {
   models?: string[];
 }
 
-export interface InspectResult {
-  canonical: unknown;
-  outgoing: unknown;
-  notes: FidelityNote[];
-  route?: {
-    provider: string;
-    protocol: string;
-    upstream_model: string;
-    alias: string;
-  };
-  lossy: boolean;
-}
-
 export class ApiError extends Error {
   status: number;
   constructor(status: number, message: string) {
@@ -609,8 +596,6 @@ export const api = {
   },
   log: (id: number) => request<RequestLogDetail>(`/api/logs/${id}`),
 
-  inspect: (input: InspectInput) =>
-    request<InspectResult>("/api/inspect", { method: "POST", body: body(input) }),
 };
 
 export interface ProviderInput {
@@ -652,12 +637,4 @@ export interface AliasInput {
   upstream_model: string;
   priority: number;
   enabled: boolean;
-}
-
-export interface InspectInput {
-  input_protocol: ProtocolName;
-  output_protocol: ProtocolName | "";
-  use_routing: boolean;
-  body: unknown;
-  model: string;
 }

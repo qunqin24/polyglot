@@ -4,7 +4,7 @@ import "fmt"
 
 // Fidelity records how faithfully a field survived a protocol conversion.
 // Protocols are not equivalent; Polyglot never silently drops a field, it
-// records what happened so the Inspector and logs can show it.
+// records what happened so the request logs can show it.
 type Fidelity string
 
 const (
@@ -28,7 +28,7 @@ const (
 	ModeStrict Mode = "strict"
 	// ModeWarn: proceed, but surface warnings to the client.
 	ModeWarn Mode = "warn"
-	// ModeBestEffort: proceed silently, recording notes for logs/Inspector.
+	// ModeBestEffort: proceed silently, recording notes for the logs.
 	ModeBestEffort Mode = "best_effort"
 )
 

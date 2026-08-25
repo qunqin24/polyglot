@@ -12,7 +12,6 @@ import { Models } from "@/pages/models";
 import { Pricing } from "@/pages/pricing";
 import { Keys } from "@/pages/keys";
 import { Logs } from "@/pages/logs";
-import { Inspector } from "@/pages/inspector";
 import { Settings } from "@/pages/settings";
 
 type Session =
@@ -92,7 +91,6 @@ export function App() {
           <Route path="/pricing" element={<Pricing />} />
           <Route path="/keys" element={<Keys />} />
           <Route path="/logs" element={<Logs />} />
-          <Route path="/inspector" element={<Inspector />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

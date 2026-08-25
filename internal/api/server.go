@@ -223,7 +223,6 @@ func (s *Server) Handler() http.Handler {
 			r.Get("/logs", s.handleListLogs)
 			r.Get("/logs/{id}", s.handleGetLog)
 
-			r.Post("/inspect", s.handleInspect)
 		})
 	})
 

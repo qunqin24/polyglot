@@ -21,8 +21,8 @@ import (
 	"github.com/qunqin24/polyglot/web"
 )
 
-// adminBodyLimit caps admin API payloads. The Inspector accepts pasted
-// requests, so it is not tiny, but it is far below the gateway limit.
+// adminBodyLimit caps admin API payloads. It is generous enough for the
+// largest form the admin API takes, and far below the gateway limit.
 const adminBodyLimit = 4 << 20
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

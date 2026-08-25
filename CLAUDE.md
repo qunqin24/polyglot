@@ -131,8 +131,7 @@ happened via `canonical.Diagnostics`:
 - `FidelityLossy` — carried over with a loss
 - `FidelityUnsupported` — the target cannot express it
 
-Notes surface in request logs and in the Protocol Inspector. A dropped field
-with no note is a bug.
+Notes surface in request logs. A dropped field with no note is a bug.
 
 `internal/protocol/matrix_test.go` walks all 5×5 protocol pairs and enforces the
 rule above: a field must either survive the round trip **or** produce a fidelity

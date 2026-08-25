@@ -64,7 +64,7 @@ func Capture(proto Name, body []byte, scopes ...Scope) *canonical.Extensions {
 			}
 		}
 		// Sorted so the captured order is stable across runs, which keeps
-		// notes and Inspector output diffable.
+		// the notes diffable.
 		sort.Strings(names)
 		for _, name := range names {
 			if len(ext.Items) >= canonical.MaxExtensions {

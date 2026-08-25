@@ -7,7 +7,6 @@ import {
   CircleDollarSign,
   KeyRound,
   ScrollText,
-  Microscope,
   Settings as SettingsIcon,
   Sun,
   Moon,
@@ -33,7 +32,6 @@ const NAV: { to: string; label: TranslationKey; icon: typeof Activity; end?: boo
   { to: "/pricing", label: "nav.pricing", icon: CircleDollarSign },
   { to: "/keys", label: "nav.keys", icon: KeyRound },
   { to: "/logs", label: "nav.logs", icon: ScrollText },
-  { to: "/inspector", label: "nav.inspector", icon: Microscope },
   { to: "/settings", label: "nav.settings", icon: SettingsIcon },
 ];
 

@@ -48,7 +48,6 @@ export const zh: Catalog = {
   "nav.pricing": "价格",
   "nav.keys": "API 密钥",
   "nav.logs": "日志",
-  "nav.inspector": "协议检查器",
   "nav.settings": "设置",
 
   // --- auth -----------------------------------------------------------------
@@ -454,7 +453,7 @@ export const zh: Catalog = {
   "logs.errorLabelTyped": "错误（{type}）",
   "logs.conversion": "协议转换",
   "logs.noLoss": "无损转换 —— 每个字段都有直接对应项。",
-  "logs.privacyNote": "提示词与回复正文有意不做存储。想看请求如何转换，请使用协议检查器。",
+  "logs.privacyNote": "提示词与回复正文有意不做存储。上面的转换记录就是这次请求留下的全部痕迹。",
   "logs.statusSuccess": "成功",
   "logs.statusError": "失败",
   "logs.statusCancelled": "已取消",
@@ -519,28 +518,6 @@ export const zh: Catalog = {
   "fidelity.semantic": "语义等价",
   "fidelity.lossy": "有损",
   "fidelity.unsupported": "不支持",
-
-  // --- inspector ------------------------------------------------------------
-  "inspector.title": "协议检查器",
-  "inspector.description": "观察一个请求穿过统一中间格式的全过程。不会向任何供应商发送请求。",
-  "inspector.convert": "转换",
-  "inspector.inputProtocol": "输入协议",
-  "inspector.outputProtocol": "输出协议",
-  "inspector.outputFromRouting": "由模型解析决定",
-  "inspector.useRouting": "按真实请求的方式解析模型",
-  "inspector.modelAlias": "模型",
-  "inspector.selectAlias": "选择模型",
-  "inspector.incoming": "输入",
-  "inspector.canonical": "统一格式",
-  "inspector.canonicalSubtitle": "协议无关",
-  "inspector.outgoing": "输出",
-  "inspector.canonicalPlaceholder": "点击「转换」查看内部表示。",
-  "inspector.outgoingPlaceholder": "点击「转换」查看发往上游的请求。",
-  "inspector.notes": "转换记录",
-  "inspector.lossy": "并非完全等价",
-  "inspector.noLoss": "无损",
-  "inspector.noNotes": "所有字段在 {protocol} 中都有直接对应项。",
-  "inspector.invalidJSON": "请求不是合法的 JSON：{message}",
 
   // --- settings -------------------------------------------------------------
   "settings.title": "设置",

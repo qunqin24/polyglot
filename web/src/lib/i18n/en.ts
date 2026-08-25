@@ -44,7 +44,6 @@ export const en = {
   "nav.pricing": "Pricing",
   "nav.keys": "API Keys",
   "nav.logs": "Logs",
-  "nav.inspector": "Inspector",
   "nav.settings": "Settings",
 
   // --- auth -----------------------------------------------------------------
@@ -468,7 +467,7 @@ export const en = {
   "logs.conversion": "Protocol conversion",
   "logs.noLoss": "Converted without loss — every field had a direct equivalent.",
   "logs.privacyNote":
-    "Prompt and completion text is deliberately not stored. Use the Inspector to see how a request converts.",
+    "Prompt and completion text is deliberately not stored. The conversion notes above are what a request left behind.",
   "logs.statusSuccess": "Success",
   "logs.statusError": "Error",
   "logs.statusCancelled": "Cancelled",
@@ -537,29 +536,6 @@ export const en = {
   "fidelity.semantic": "semantic",
   "fidelity.lossy": "lossy",
   "fidelity.unsupported": "unsupported",
-
-  // --- inspector ------------------------------------------------------------
-  "inspector.title": "Protocol Inspector",
-  "inspector.description":
-    "Watch a request pass through the canonical hub. Nothing is sent to a provider.",
-  "inspector.convert": "Convert",
-  "inspector.inputProtocol": "Input protocol",
-  "inspector.outputProtocol": "Output protocol",
-  "inspector.outputFromRouting": "Decided by model resolution",
-  "inspector.useRouting": "Resolve the model as a real request would",
-  "inspector.modelAlias": "Model",
-  "inspector.selectAlias": "Select a model",
-  "inspector.incoming": "Incoming",
-  "inspector.canonical": "Canonical",
-  "inspector.canonicalSubtitle": "protocol-neutral",
-  "inspector.outgoing": "Outgoing",
-  "inspector.canonicalPlaceholder": "Press Convert to see the internal representation.",
-  "inspector.outgoingPlaceholder": "Press Convert to see the upstream request.",
-  "inspector.notes": "Conversion notes",
-  "inspector.lossy": "Not fully equivalent",
-  "inspector.noLoss": "No loss",
-  "inspector.noNotes": "Every field had a direct equivalent in {protocol}.",
-  "inspector.invalidJSON": "The request is not valid JSON: {message}",
 
   // --- settings -------------------------------------------------------------
   "settings.title": "Settings",

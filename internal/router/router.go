@@ -37,7 +37,7 @@ type Resolution struct {
 	Alias         string
 	UpstreamModel string
 	Target        *provider.Target
-	// Via records which rule matched, for logs and for the Inspector.
+	// Via records which rule matched, for the request logs.
 	Via string
 	// Priority is the key the store ordered these candidates by — the alias
 	// row's for an alias, the provider's for a registry model. Candidates

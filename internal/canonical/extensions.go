@@ -23,9 +23,8 @@ import (
 // demand and which today does not happen at all.
 //
 // This is deliberately not a passthrough mode. There is still one code path:
-// every request is decoded to canonical and encoded from it, the Inspector
-// still has a canonical form to show, and token usage, TTFT and TPS are still
-// measured. The only thing that changes is that unknown fields ride along
+// every request is decoded to canonical and encoded from it, the fidelity
+// notes are still recorded, and token usage, TTFT and TPS are still measured. The only thing that changes is that unknown fields ride along
 // instead of falling on the floor.
 type Extensions struct {
 	// Protocol is the wire format these fields were read from. An encoder

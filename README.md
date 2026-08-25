@@ -351,8 +351,8 @@ records what happened:
 | `lossy` | Carried with a loss of information |
 | `unsupported` | The target protocol cannot express it |
 
-These notes appear in the request log and the Protocol Inspector. **A dropped
-field with no note is a bug** — a 5×5 matrix test enforces this on every build.
+These notes appear in the request log. **A dropped field with no note is a
+bug** — a 5×5 matrix test enforces this on every build.
 
 ### Provider parameter passthrough
 
@@ -361,8 +361,8 @@ DeepSeek's `prefix` — are captured on decode and replayed on encode **when the
 source and target protocol match**. Cross-protocol, they are reported as
 unsupported rather than forwarded blindly.
 
-This is not a passthrough mode. Every request still goes through canonical. The
-Inspector still has a canonical form to show, and usage is still measured.
+This is not a passthrough mode. Every request still goes through canonical, so
+the fidelity notes are still recorded and usage is still measured.
 
 ### Replay tokens
 
@@ -456,14 +456,6 @@ the calling address, and fidelity notes. Filterable by all of these plus
 `X-Title`, referer and user agent.
 
 **No prompts or completions are ever stored.**
-
-### Protocol Inspector
-
-![Protocol Inspector](docs/screenshots/inspector.png)
-
-See a request as it arrived, in canonical form, and as it left — side by side.
-Shows exactly what the conversion did, what was carried, what was lost, and why.
-This is the debugging tool for conversion issues.
 
 ### Pricing
 
