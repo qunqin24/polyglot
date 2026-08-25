@@ -219,6 +219,7 @@ func (s *Server) Handler() http.Handler {
 			r.Post("/keys/{id}/budget/reset", s.handleResetKeyBudget)
 			r.Delete("/keys/{id}", s.handleDeleteKey)
 			r.Get("/keys/{id}/origins", s.handleKeyOrigins)
+			r.Post("/keys/{id}/secret", s.handleRevealKey)
 
 			r.Get("/logs", s.handleListLogs)
 			r.Get("/logs/{id}", s.handleGetLog)

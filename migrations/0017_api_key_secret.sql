@@ -1,0 +1,11 @@
+-- Polyglot's own keys were stored as a hash and nothing else, so an operator
+-- who lost one had to delete it and rebuild its limits, budget and model list
+-- from scratch. The secret is now also kept encrypted with the same
+-- AES-256-GCM key that protects provider credentials, so the operator can read
+-- back a key they already hold.
+--
+-- The hash stays and stays UNIQUE: it is what authentication looks up, and
+-- nothing about the request path changes. Keys created before this migration
+-- have no ciphertext and can never be shown again — that is a fact about the
+-- past, not a state to repair.
+ALTER TABLE api_keys ADD COLUMN secret_enc BLOB;

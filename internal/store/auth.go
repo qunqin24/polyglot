@@ -220,6 +220,10 @@ type APIKey struct {
 	// BudgetResets, so the page shows the same instant the limiter uses
 	// instead of a second implementation of "start of the month".
 	BudgetResetsAt *time.Time `json:"budget_resets_at,omitempty"`
+	// Revealable reports whether the secret can still be shown. Keys created
+	// before Polyglot kept the ciphertext have only a hash, and no amount of
+	// asking brings those back.
+	Revealable bool `json:"revealable"`
 }
 
 // How a key's budget window resets.
@@ -299,7 +303,7 @@ type APIKeyPolicy struct {
 
 const apiKeyCols = `id, name, prefix, enabled, created_at, last_used_at,
 	rpm, rph, rpd, tpm, tpd, max_concurrent, max_output_tokens, expires_at,
-	budget_usd, budget_period, budget_anchor`
+	budget_usd, budget_period, budget_anchor, secret_enc IS NOT NULL`
 
 func (s *Store) ListAPIKeys(ctx context.Context) ([]*APIKey, error) {
 	rows, err := s.db.QueryContext(ctx,
@@ -335,12 +339,14 @@ func scanAPIKey(sc interface{ Scan(...any) error }) (*APIKey, error) {
 		concurrent, output, expires sql.NullInt64
 		budget                      sql.NullFloat64
 		anchor                      sql.NullInt64
+		revealable                  int
 	)
 	if err := sc.Scan(&k.ID, &k.Name, &k.Prefix, &enabled, &created, &lastUsed,
 		&rpm, &rph, &rpd, &tpm, &tpd, &concurrent, &output, &expires,
-		&budget, &k.BudgetPeriod, &anchor); err != nil {
+		&budget, &k.BudgetPeriod, &anchor, &revealable); err != nil {
 		return nil, err
 	}
+	k.Revealable = revealable != 0
 	if budget.Valid {
 		usd := budget.Float64
 		k.BudgetUSD = &usd
@@ -370,11 +376,18 @@ func scanAPIKey(sc interface{ Scan(...any) error }) (*APIKey, error) {
 	return &k, nil
 }
 
-func (s *Store) CreateAPIKey(ctx context.Context, name, prefix, secretHash string) (*APIKey, error) {
-	return s.CreateAPIKeyWithPolicy(ctx, name, prefix, secretHash, APIKeyPolicy{})
+// CreateAPIKey takes the plaintext secret, not its hash: the row keeps both a
+// hash to authenticate against and a ciphertext so the operator can read the
+// key back. Callers hand over the plaintext once and never store it.
+func (s *Store) CreateAPIKey(ctx context.Context, name, prefix, secret string) (*APIKey, error) {
+	return s.CreateAPIKeyWithPolicy(ctx, name, prefix, secret, APIKeyPolicy{})
 }
 
-func (s *Store) CreateAPIKeyWithPolicy(ctx context.Context, name, prefix, secretHash string, p APIKeyPolicy) (*APIKey, error) {
+func (s *Store) CreateAPIKeyWithPolicy(ctx context.Context, name, prefix, secret string, p APIKeyPolicy) (*APIKey, error) {
+	secretEnc, err := s.cipher.Encrypt(secret)
+	if err != nil {
+		return nil, fmt.Errorf("encrypt api key: %w", err)
+	}
 	now := time.Now().Unix()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -382,11 +395,12 @@ func (s *Store) CreateAPIKeyWithPolicy(ctx context.Context, name, prefix, secret
 	}
 	defer tx.Rollback()
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO api_keys (name, prefix, secret_hash, enabled, created_at,
+		`INSERT INTO api_keys (name, prefix, secret_hash, secret_enc, enabled, created_at,
 		 rpm, rph, rpd, tpm, tpd, max_concurrent, max_output_tokens, expires_at,
 		 budget_usd, budget_period, budget_anchor)
-		 VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		name, prefix, secretHash, now, nullPositive(p.RPM), nullPositive(p.RPH), nullPositive(p.RPD),
+		 VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		name, prefix, HashToken(secret), secretEnc, now,
+		nullPositive(p.RPM), nullPositive(p.RPH), nullPositive(p.RPD),
 		nullPositive(p.TPM), nullPositive(p.TPD), nullPositive(p.MaxConcurrent),
 		nullPositive(p.MaxOutputTokens), nullTime(p.ExpiresAt),
 		nullBudget(p.BudgetUSD), budgetPeriodOr(p.BudgetPeriod), now)
@@ -407,7 +421,33 @@ func (s *Store) CreateAPIKeyWithPolicy(ctx context.Context, name, prefix, secret
 		TPM: positivePtr(p.TPM), TPD: positivePtr(p.TPD), MaxConcurrent: positivePtr(p.MaxConcurrent),
 		MaxOutputTokens: positivePtr(p.MaxOutputTokens), ExpiresAt: p.ExpiresAt, AllowedModels: models,
 		BudgetUSD: positiveMoney(p.BudgetUSD), BudgetPeriod: budgetPeriodOr(p.BudgetPeriod),
-		BudgetAnchor: &anchor}, nil
+		BudgetAnchor: &anchor, Revealable: true}, nil
+}
+
+// ErrSecretUnavailable reports a key created before Polyglot kept the
+// ciphertext. It is not a failure to decrypt — there is nothing there.
+var ErrSecretUnavailable = errors.New("this key was created before Polyglot stored recoverable secrets, so it can no longer be shown")
+
+// APIKeySecret returns the plaintext of a key the operator already owns. Only
+// the admin API calls this, and it never reaches a request path.
+func (s *Store) APIKeySecret(ctx context.Context, id int64) (string, error) {
+	var enc []byte
+	err := s.db.QueryRowContext(ctx,
+		`SELECT secret_enc FROM api_keys WHERE id = ?`, id).Scan(&enc)
+	if err == sql.ErrNoRows {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("read api key secret: %w", err)
+	}
+	if len(enc) == 0 {
+		return "", ErrSecretUnavailable
+	}
+	secret, err := s.cipher.Decrypt(enc)
+	if err != nil {
+		return "", fmt.Errorf("decrypt api key secret: %w", err)
+	}
+	return secret, nil
 }
 
 // APIKeyByHash looks up an active key. Callers pass the SHA-256 of the

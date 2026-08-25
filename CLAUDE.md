@@ -464,7 +464,18 @@ exist here. Do not document an exporter that has not been written.
 - Provider credentials are encrypted at rest (AES-256-GCM, key in
   `$DATA_DIR/secret.key`). `store.Provider.APIKey` is `json:"-"` and must never
   reach the browser — not even to the form that edits it.
-- Polyglot's own API keys are stored as SHA-256 hashes and shown exactly once.
+- Polyglot's own API keys are authenticated against a SHA-256 hash and also
+  kept encrypted (AES-256-GCM, the same `$DATA_DIR/secret.key` as provider
+  credentials) so the operator can read back a key they already hold. One
+  person runs this gateway; making them delete a key and rebuild its limits,
+  budget and model list because they lost a string was a worse deal than the
+  hash bought. The hash stays and stays what the request path looks up —
+  nothing about authentication changed. Reading one back is an admin-session
+  POST (`POST /api/keys/{id}/secret`), never a GET, and the plaintext goes into
+  that one response body and nowhere else — the WebUI copies it to the
+  clipboard rather than printing it on screen, so it never sits in a
+  screenshot. Keys created before migration 0017 have no ciphertext and report
+  `revealable: false`; that is a fact about the past, not a state to repair.
 - **Strip upstream credentials from every error path** before it reaches a
   client or a log (`redact` / `redactSecret`). There is a test for this.
 - Request logs record metadata only. **Never store prompts or completions.**
@@ -474,7 +485,6 @@ exist here. Do not document an exporter that has not been written.
 - Keep the input size limits, upstream response caps and timeouts.
 - Validate provider base URLs (scheme, no embedded credentials). Never follow a
   cross-host redirect with the auth header attached.
-
 ## Scope / Non-Goals
 
 **Do not add infrastructure:** Redis, PostgreSQL, MySQL, Kafka, RabbitMQ,

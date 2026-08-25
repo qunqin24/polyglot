@@ -153,6 +153,9 @@ export interface APIKey {
   name: string;
   prefix: string;
   enabled: boolean;
+  /** Whether the secret can still be shown. False for keys created before
+   *  Polyglot kept a recoverable copy — those are gone for good. */
+  revealable: boolean;
   created_at: string;
   last_used_at: string | null;
   rpm: number | null;
@@ -580,6 +583,10 @@ export const api = {
   /** Starts a fresh total window. Only a total budget has one to start. */
   resetKeyBudget: (id: number) =>
     request<APIKey>(`/api/keys/${id}/budget/reset`, { method: "POST" }),
+  /** Reads back a key the operator already owns. POST so the CSRF check
+   *  covers it, even though it changes nothing. */
+  revealKey: (id: number) =>
+    request<{ secret: string }>(`/api/keys/${id}/secret`, { method: "POST" }),
   deleteKey: (id: number) => request<{ ok: boolean }>(`/api/keys/${id}`, { method: "DELETE" }),
   keyOrigins: (id: number, days = 30) =>
     request<{ origins: KeyOrigin[]; days: number }>(`/api/keys/${id}/origins?days=${days}`),

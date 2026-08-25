@@ -151,6 +151,14 @@ func TestADatabaseFromThePreviousVersionUpgrades(t *testing.T) {
 		legacyKey.MaxOutputTokens != nil || legacyKey.ExpiresAt != nil || len(legacyKey.AllowedModels) != 0 {
 		t.Errorf("an old unrestricted key gained restrictions during migration: %+v", legacyKey)
 	}
+	// The secret of a key written before there was a ciphertext column is gone,
+	// and the row must say so rather than fail obscurely when someone asks.
+	if legacyKey.Revealable {
+		t.Error("a key that predates the ciphertext claims it can still be shown")
+	}
+	if _, err := st.APIKeySecret(context.Background(), legacyKey.ID); !errors.Is(err, ErrSecretUnavailable) {
+		t.Errorf("secret of a pre-upgrade key = %v, want ErrSecretUnavailable", err)
+	}
 
 	// And the old configuration still routes: the model registered by the
 	// previous version is still resolvable.

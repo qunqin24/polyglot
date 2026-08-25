@@ -630,8 +630,9 @@ func (s *Server) handleResetKeyBudget(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, fresh)
 }
 
-// handleCreateKey returns the plaintext key exactly once. Only its hash is
-// persisted, so it can never be shown again.
+// handleCreateKey returns the plaintext key. The row keeps a hash to
+// authenticate against and a ciphertext, so handleRevealKey can show it again
+// to the operator who owns it.
 func (s *Server) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Name   string            `json:"name"`
@@ -650,8 +651,8 @@ func (s *Server) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "%s", msg)
 		return
 	}
-	plaintext, prefix, hash := auth.NewAPIKey()
-	key, err := s.store.CreateAPIKeyWithPolicy(r.Context(), name, prefix, hash, policy)
+	plaintext, prefix := auth.NewAPIKey()
+	key, err := s.store.CreateAPIKeyWithPolicy(r.Context(), name, prefix, plaintext, policy)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "%v", err)
 		return
@@ -661,6 +662,29 @@ func (s *Server) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 		"key":    key,
 		"secret": plaintext,
 	})
+}
+
+// handleRevealKey shows the operator a key they already own. It is a POST so
+// the CSRF check covers it: a GET returning a secret is reachable by a
+// cross-site page even though it cannot read the reply, and that is a needless
+// edge to leave open. The secret goes into the response body and nowhere else
+// — never into a log, never into a URL.
+func (s *Server) handleRevealKey(w http.ResponseWriter, r *http.Request) {
+	id, err := idParam(r, "id")
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid key id")
+		return
+	}
+	secret, err := s.store.APIKeySecret(r.Context(), id)
+	if errors.Is(err, store.ErrSecretUnavailable) {
+		writeErr(w, http.StatusGone, "%v", err)
+		return
+	}
+	if err != nil {
+		writeErr(w, storeErrStatus(err), "%v", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"secret": secret})
 }
 
 func (s *Server) handleUpdateKey(w http.ResponseWriter, r *http.Request) {

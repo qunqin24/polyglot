@@ -34,11 +34,12 @@ const (
 	ctxAdmin
 )
 
-// NewAPIKey mints a key. The plaintext is returned once and never stored.
-func NewAPIKey() (plaintext, prefix, hash string) {
+// NewAPIKey mints a key. The caller hands the plaintext to the store, which
+// keeps a hash to authenticate against and a ciphertext to show the operator
+// later; nothing else holds on to it.
+func NewAPIKey() (plaintext, prefix string) {
 	plaintext = KeyPrefix + idgen.Secret()
 	prefix = plaintext[:11]
-	hash = store.HashToken(plaintext)
 	return
 }
 

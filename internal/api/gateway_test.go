@@ -138,8 +138,8 @@ func newHarness(t *testing.T, upstreamHandler http.HandlerFunc, protocolName str
 		t.Fatalf("create alias: %v", err)
 	}
 
-	plaintext, prefix, hash := auth.NewAPIKey()
-	if _, err := st.CreateAPIKey(ctxBg, "test", prefix, hash); err != nil {
+	plaintext, prefix := auth.NewAPIKey()
+	if _, err := st.CreateAPIKey(ctxBg, "test", prefix, plaintext); err != nil {
 		t.Fatalf("create api key: %v", err)
 	}
 

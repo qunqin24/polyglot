@@ -22,8 +22,8 @@ func limitStore(t *testing.T) *store.Store {
 
 func restrictedKey(t *testing.T, st *store.Store, p store.APIKeyPolicy) *store.APIKey {
 	t.Helper()
-	_, prefix, hash := NewAPIKey()
-	k, err := st.CreateAPIKeyWithPolicy(context.Background(), "limited", prefix, hash, p)
+	secret, prefix := NewAPIKey()
+	k, err := st.CreateAPIKeyWithPolicy(context.Background(), "limited", prefix, secret, p)
 	if err != nil {
 		t.Fatalf("create key: %v", err)
 	}

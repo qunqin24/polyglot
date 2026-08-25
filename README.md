@@ -439,8 +439,10 @@ is displayed as a share of tokens, not requests.
 
 ![API Keys](docs/screenshots/keys.png)
 
-Create and manage Polyglot API keys. Keys are stored as SHA-256 hashes and
-shown exactly once on creation. Each key shows the addresses it has been used
+Create and manage Polyglot API keys. A key is authenticated against a SHA-256
+hash and also kept encrypted at rest, so the list can copy a key back to your
+clipboard instead of making you delete it and rebuild its settings. Each key
+shows the addresses it has been used
 from, busiest first — a key suddenly used from a new address is visible here.
 
 Optional per-key limits: requests per minute, tokens per day, and a spending
@@ -649,7 +651,8 @@ curl http://localhost:3000/v1/chat/completions \
 
 - Provider credentials: AES-256-GCM encrypted at rest. **Never sent to the
   browser** — not even to the edit form.
-- API keys: SHA-256 hashed, shown once on creation.
+- API keys: authenticated against a SHA-256 hash, and kept encrypted with the
+  same key as provider credentials so the operator can read one back.
 - Error paths: upstream credentials stripped before reaching clients or logs.
 - Request logs: metadata only. **No prompts, no completions, no headers.**
 - Admin sessions: HttpOnly cookie + double-submit CSRF token.

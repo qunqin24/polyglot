@@ -193,7 +193,7 @@ export function Keys() {
                 {visible.map((k) => (
                   <Tr key={k.id}>
                     <Td className="pl-5 font-medium">{k.name}</Td>
-                    <Td className="font-mono text-xs text-muted-foreground">{k.prefix}…</Td>
+                    <Td><SecretCell apiKey={k} /></Td>
                     <Td><LimitSummary apiKey={k} /></Td>
                     <Td><BudgetCell apiKey={k} /></Td>
                     <Td><Expiration apiKey={k} /></Td>
@@ -259,6 +259,54 @@ export function Keys() {
         onConfirm={() => void remove()}
       />
     </>
+  );
+}
+
+/**
+ * SecretCell copies a key rather than showing it. The secret is fetched only
+ * when the operator asks for it and goes straight to the clipboard, so it
+ * never sits on screen for a shoulder or a screenshot to pick up.
+ */
+function SecretCell({ apiKey }: { apiKey: APIKey }) {
+  const t = useT();
+  const { toast } = useToast();
+  const [busy, setBusy] = React.useState(false);
+  const [copied, setCopied] = React.useState(false);
+
+  async function copy() {
+    setBusy(true);
+    try {
+      const res = await api.revealKey(apiKey.id);
+      if (await copyToClipboard(res.secret)) {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      } else {
+        toast(t("keys.copyFailed"), "error");
+      }
+    } catch (err) {
+      toast(errorMessage(err), "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // A key from before the ciphertext existed renders the button disabled
+  // rather than absent: a missing control looks like a bug, a greyed-out one
+  // with a reason attached is an explanation.
+  return (
+    <div className="flex items-center gap-1">
+      <code className="font-mono text-xs text-muted-foreground">{apiKey.prefix}…</code>
+      <span title={apiKey.revealable ? t("keys.copyKey") : t("keys.notRevealable")}>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          disabled={!apiKey.revealable || busy}
+          onClick={() => void copy()}
+        >
+          {busy ? <Spinner className="size-4" /> : copied ? <Check className="text-[--color-success]" /> : <Copy />}
+        </Button>
+      </span>
+    </div>
   );
 }
 
