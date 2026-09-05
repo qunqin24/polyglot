@@ -11,6 +11,8 @@ import (
 	"net/url"
 	"path/filepath"
 	"sort"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/qunqin24/polyglot/migrations"
@@ -19,8 +21,11 @@ import (
 )
 
 type Store struct {
-	db     *sql.DB
-	cipher *Cipher
+	db             *sql.DB
+	cipher         *Cipher
+	contentDir     string
+	contentLogging atomic.Pointer[ContentLogSettings]
+	contentMu      sync.Mutex
 }
 
 // Open connects to the SQLite file, applies migrations and loads (or creates)
@@ -50,7 +55,7 @@ func Open(ctx context.Context, dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("ping sqlite: %w", err)
 	}
 
-	s := &Store{db: db}
+	s := &Store{db: db, contentDir: filepath.Join(filepath.Dir(dbPath), "log-content")}
 	if err := s.migrate(ctx); err != nil {
 		db.Close()
 		return nil, err
@@ -61,6 +66,10 @@ func Open(ctx context.Context, dbPath string) (*Store, error) {
 		return nil, err
 	}
 	s.cipher = c
+	if err := s.loadContentLogging(ctx); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return s, nil
 }
 

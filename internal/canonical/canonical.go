@@ -248,8 +248,10 @@ type Tool struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	// Parameters is a JSON Schema object describing the tool input.
-	Parameters json.RawMessage `json:"parameters,omitempty"`
-	Strict     bool            `json:"strict,omitempty"`
+	Parameters           json.RawMessage `json:"parameters,omitempty"`
+	ParametersJSONSchema bool            `json:"parameters_json_schema,omitempty"`
+	Strict               bool            `json:"strict,omitempty"`
+	StrictSet            bool            `json:"strict_set,omitempty"`
 	// Cache marks the tool definitions up to and including this one as a
 	// cacheable prefix. See CacheHint.
 	Cache *CacheHint `json:"cache,omitempty"`
@@ -297,6 +299,8 @@ const (
 )
 
 type ReasoningConfig struct {
+	// Type preserves provider modes such as Anthropic's adaptive thinking.
+	Type         string          `json:"type,omitempty"`
 	Enabled      bool            `json:"enabled"`
 	Effort       ReasoningEffort `json:"effort,omitempty"`
 	BudgetTokens *int            `json:"budget_tokens,omitempty"`

@@ -24,7 +24,7 @@ type Target struct {
 	Timeout  time.Duration
 	// AutoDisableOnAuthError lets a rejected credential take this provider out
 	// of rotation, rather than leaving it to fail every request until someone
-	// notices. Opt-in, because 401 and 403 are not always about the key.
+	// notices. Opt-in, because 401s are not always about the key.
 	AutoDisableOnAuthError bool
 	// StrictFields stops request fields Polyglot does not recognise from being
 	// replayed to this upstream. Set for an upstream that rejects members it

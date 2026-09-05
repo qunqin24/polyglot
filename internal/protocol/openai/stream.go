@@ -172,6 +172,9 @@ func (Codec) DecodeStream(ctx context.Context, r io.Reader, emit func(*canonical
 	if !started {
 		return canonical.Errorf(canonical.ErrUpstream, "upstream closed the stream without sending any data")
 	}
+	if !sawFinish {
+		return canonical.Errorf(canonical.ErrUpstream, "upstream closed the stream before a terminal finish event")
+	}
 	for _, idx := range toolOpen {
 		if err := emit(&canonical.Event{Type: canonical.EventToolCallEnd, Index: idx}); err != nil {
 			return err
@@ -181,9 +184,6 @@ func (Codec) DecodeStream(ctx context.Context, r io.Reader, emit func(*canonical
 		if err := emit(&canonical.Event{Type: canonical.EventUsage, Usage: lastUsage}); err != nil {
 			return err
 		}
-	}
-	if !sawFinish {
-		finish = canonical.FinishStop
 	}
 	end := &canonical.Event{Type: canonical.EventMessageEnd, FinishReason: finish, Usage: lastUsage}
 	return emit(end)
@@ -219,6 +219,7 @@ type streamEncoder struct {
 	nextOrdinal  int
 	usage        *canonical.Usage
 	finished     bool
+	failed       bool
 	closed       bool
 }
 
@@ -321,6 +322,9 @@ func (e *streamEncoder) Write(ev *canonical.Event) error {
 		return nil
 
 	case canonical.EventMessageEnd:
+		if e.failed {
+			return nil
+		}
 		if err := e.ensureRole(); err != nil {
 			return err
 		}
@@ -332,6 +336,7 @@ func (e *streamEncoder) Write(ev *canonical.Event) error {
 		return e.send(e.chunk(wireDelta{}, &reason))
 
 	case canonical.EventError:
+		e.failed = true
 		if ev.Error == nil {
 			return nil
 		}
@@ -345,7 +350,7 @@ func (e *streamEncoder) Close() error {
 		return nil
 	}
 	e.closed = true
-	if !e.finished {
+	if !e.finished && !e.failed {
 		reason := "stop"
 		if err := e.send(e.chunk(wireDelta{}, &reason)); err != nil {
 			return err

@@ -154,14 +154,11 @@ func (Codec) DecodeStream(ctx context.Context, r io.Reader, emit func(*canonical
 	if !started {
 		return canonical.Errorf(canonical.ErrUpstream, "upstream closed the stream without sending any data")
 	}
+	if !sawFinish {
+		return canonical.Errorf(canonical.ErrUpstream, "upstream closed the stream before a terminal finish event")
+	}
 	if err := emit(&canonical.Event{Type: canonical.EventUsage, Usage: &usage}); err != nil {
 		return err
-	}
-	if !sawFinish {
-		finish = canonical.FinishStop
-		if hasTool {
-			finish = canonical.FinishToolCalls
-		}
 	}
 	return emit(&canonical.Event{Type: canonical.EventMessageEnd, FinishReason: finish, Usage: &usage})
 }
@@ -207,6 +204,7 @@ type streamEncoder struct {
 	finish       canonical.FinishReason
 	finished     bool
 	closed       bool
+	failed       bool
 }
 
 type pendingTool struct {
@@ -351,6 +349,9 @@ func (e *streamEncoder) Write(ev *canonical.Event) error {
 		return nil
 
 	case canonical.EventMessageEnd:
+		if e.failed {
+			return nil
+		}
 		if ev.Usage != nil {
 			e.usage = *ev.Usage
 		}
@@ -367,6 +368,7 @@ func (e *streamEncoder) Write(ev *canonical.Event) error {
 		return e.sendFinal()
 
 	case canonical.EventError:
+		e.failed = true
 		if ev.Error == nil {
 			return nil
 		}
@@ -444,10 +446,11 @@ func (e *streamEncoder) sendFinal() error {
 			Index:        0,
 		}},
 		UsageMetadata: &usageMetadata{
-			PromptTokenCount:     e.usage.InputTokens,
-			CandidatesTokenCount: e.usage.OutputTokens,
-			TotalTokenCount:      e.usage.InputTokens + e.usage.OutputTokens,
-			ThoughtsTokenCount:   e.usage.ReasoningTokens,
+			PromptTokenCount:        e.usage.InputTokens,
+			CandidatesTokenCount:    max(0, e.usage.OutputTokens-e.usage.ReasoningTokens),
+			TotalTokenCount:         e.usage.InputTokens + e.usage.OutputTokens,
+			ThoughtsTokenCount:      e.usage.ReasoningTokens,
+			CachedContentTokenCount: e.usage.CachedInputTokens,
 		},
 	})
 }
@@ -457,7 +460,7 @@ func (e *streamEncoder) Close() error {
 		return nil
 	}
 	e.closed = true
-	if e.finished {
+	if e.finished || e.failed {
 		return nil
 	}
 	if err := e.flushPendingContent(); err != nil {

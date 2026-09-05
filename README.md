@@ -457,7 +457,7 @@ token counts (input, output, cached, reasoning), cost, TTFT, tokens per second,
 the calling address, and fidelity notes. Filterable by all of these plus
 `X-Title`, referer and user agent.
 
-**No prompts or completions are ever stored.**
+**Content recording is off by default.** Enable it in **Settings → Content logs** to retain actual prompts, tool calls/results, replies, and per-attempt wire payloads for 3, 7 (default), or 30 days. Create a separate read-only log key for agents. See the [log API guide](docs/log-api.md).
 
 ### Pricing
 
@@ -654,7 +654,7 @@ curl http://localhost:3000/v1/chat/completions \
 - API keys: authenticated against a SHA-256 hash, and kept encrypted with the
   same key as provider credentials so the operator can read one back.
 - Error paths: upstream credentials stripped before reaching clients or logs.
-- Request logs: metadata only. **No prompts, no completions, no headers.**
+- Request logs: metadata by default; opt-in full payload recording with 3/7/30-day retention and separate read-only log keys. Transport credentials are excluded; conversation bodies are retained unchanged. See [content logs](docs/log-api.md).
 - Admin sessions: HttpOnly cookie + double-submit CSRF token.
 - First-run setup: one-time token plus a database-enforced single administrator.
 - Upstream storage: OpenAI Responses and Gemini Interactions default `store` to

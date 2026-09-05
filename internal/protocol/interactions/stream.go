@@ -34,6 +34,7 @@ func (Codec) DecodeStream(ctx context.Context, r io.Reader, emit func(*canonical
 	toolIDs := map[int]string{}
 	toolNames := map[int]string{}
 	started := false
+	sawCompleted := false
 
 	for {
 		if err := ctx.Err(); err != nil {
@@ -41,6 +42,12 @@ func (Codec) DecodeStream(ctx context.Context, r io.Reader, emit func(*canonical
 		}
 		frame, err := sr.Next()
 		if err == io.EOF {
+			if !started {
+				return canonical.Errorf(canonical.ErrUpstream, "upstream closed the stream without sending any data")
+			}
+			if !sawCompleted {
+				return canonical.Errorf(canonical.ErrUpstream, "upstream closed the stream before interaction.completed")
+			}
 			return nil
 		}
 		if err != nil {
@@ -120,6 +127,7 @@ func (Codec) DecodeStream(ctx context.Context, r io.Reader, emit func(*canonical
 			}
 
 		case evCompleted:
+			sawCompleted = true
 			finish := canonical.FinishStop
 			if ev.Interaction != nil {
 				if ev.Interaction.Status == statusRequiresAction {
@@ -223,6 +231,7 @@ type streamEncoder struct {
 	opened   map[int]bool
 	started  bool
 	finished bool
+	failed   bool
 	usage    *canonical.Usage
 	finish   canonical.FinishReason
 }
@@ -317,6 +326,9 @@ func (e *streamEncoder) Write(ev *canonical.Event) error {
 		return nil
 
 	case canonical.EventMessageEnd:
+		if e.failed {
+			return nil
+		}
 		if ev.Usage != nil {
 			u := *ev.Usage
 			e.usage = &u
@@ -325,6 +337,7 @@ func (e *streamEncoder) Write(ev *canonical.Event) error {
 		return nil
 
 	case canonical.EventError:
+		e.failed = true
 		msg := "upstream error"
 		if ev.Error != nil {
 			msg = ev.Error.Message
@@ -367,7 +380,7 @@ func (e *streamEncoder) closeStep(index int) error {
 }
 
 func (e *streamEncoder) Close() error {
-	if e.finished {
+	if e.finished || e.failed {
 		return nil
 	}
 	e.finished = true

@@ -61,8 +61,11 @@ func (Codec) DecodeRequest(body []byte, d *canonical.Diagnostics) (*canonical.Re
 	if in.Metadata != nil && in.Metadata.UserID != "" {
 		req.User = in.Metadata.UserID
 	}
-	if in.Thinking != nil && in.Thinking.Type == "enabled" {
-		rc := &canonical.ReasoningConfig{Enabled: true, Visible: true}
+	if in.OutputConfig != nil && in.OutputConfig.Format != nil && in.OutputConfig.Format.Type == "json_schema" {
+		req.ResponseFormat = &canonical.ResponseFormat{Type: canonical.FormatJSONSchema, Schema: in.OutputConfig.Format.Schema}
+	}
+	if in.Thinking != nil && (in.Thinking.Type == "enabled" || in.Thinking.Type == "adaptive") {
+		rc := &canonical.ReasoningConfig{Enabled: true, Visible: true, Type: in.Thinking.Type}
 		if in.Thinking.BudgetTokens > 0 {
 			b := in.Thinking.BudgetTokens
 			rc.BudgetTokens = &b
@@ -91,7 +94,8 @@ func (Codec) DecodeRequest(body []byte, d *canonical.Diagnostics) (*canonical.Re
 			Name:        t.Name,
 			Description: t.Description,
 			Parameters:  t.InputSchema,
-			Cache:       t.CacheControl.hint(),
+			Strict:      t.Strict != nil && *t.Strict, StrictSet: t.Strict != nil,
+			Cache: t.CacheControl.hint(),
 		})
 	}
 	if in.ToolChoice != nil {
@@ -328,7 +332,9 @@ func (Codec) EncodeRequest(req *canonical.Request, d *canonical.Diagnostics) ([]
 		d.Note("n", canonical.FidelityUnsupported, "Anthropic returns a single completion; n=%d was ignored", *req.N)
 	}
 
-	if req.Reasoning != nil && req.Reasoning.Enabled {
+	if req.Reasoning != nil && req.Reasoning.Enabled && req.Reasoning.Type == "adaptive" {
+		out.Thinking = &wireThinking{Type: "adaptive"}
+	} else if req.Reasoning != nil && req.Reasoning.Enabled {
 		budget := 0
 		switch {
 		case req.Reasoning.BudgetTokens != nil:
@@ -363,11 +369,17 @@ func (Codec) EncodeRequest(req *canonical.Request, d *canonical.Diagnostics) ([]
 	}
 
 	if req.ResponseFormat != nil && req.ResponseFormat.Type != canonical.FormatText {
-		// Anthropic has no response_format. The closest faithful mapping is a
-		// system instruction, which is a genuinely weaker guarantee.
-		note := "the request asked for JSON output; Anthropic has no response_format, so the requirement was added to the system prompt instead (not enforced by the API)"
-		d.Note("response_format", canonical.FidelityLossy, "%s", note)
-		req = withSystemSuffix(req, jsonInstruction(req.ResponseFormat))
+		// JSON Schema has a native representation; JSON object mode still
+		// needs a best-effort instruction.
+		if req.ResponseFormat.Type == canonical.FormatJSONSchema && len(req.ResponseFormat.Schema) > 0 {
+			out.OutputConfig = &outputConfig{Format: &outputFormat{Type: "json_schema", Schema: req.ResponseFormat.Schema}}
+		} else if req.ResponseFormat.Type == canonical.FormatJSONObject {
+			d.Note("response_format", canonical.FidelityLossy, "Anthropic structured outputs require a JSON Schema; JSON object mode was added to the system prompt")
+			req = withSystemSuffix(req, jsonInstruction(req.ResponseFormat))
+		} else {
+			d.Note("response_format", canonical.FidelityLossy, "structured output is unavailable for this requested format; requirement was added to the system prompt")
+			req = withSystemSuffix(req, jsonInstruction(req.ResponseFormat))
+		}
 	}
 
 	for _, t := range req.Tools {
@@ -380,6 +392,12 @@ func (Codec) EncodeRequest(req *canonical.Request, d *canonical.Diagnostics) ([]
 			Description:  t.Description,
 			InputSchema:  schema,
 			CacheControl: cacheControlFrom(t.Cache),
+			Strict: func() *bool {
+				if t.StrictSet || t.Strict {
+					return &t.Strict
+				}
+				return nil
+			}(),
 		})
 	}
 	if req.ToolChoice != nil {
@@ -501,7 +519,26 @@ func encodeMessages(msgs []canonical.Message, d *canonical.Diagnostics) ([]wireM
 				if p.ToolResult == nil {
 					continue
 				}
-				content, err := json.Marshal(joinText(p.ToolResult.Content))
+				var resultBlocks []block
+				for _, cp := range p.ToolResult.Content {
+					if cp.Type == canonical.PartText {
+						resultBlocks = append(resultBlocks, block{Type: "text", Text: cp.Text})
+					}
+					if cp.Type == canonical.PartImage || cp.Type == canonical.PartFile {
+						if media := encodeMediaBlock(cp, d, fmt.Sprintf("messages[%d].tool_result", i)); media != nil {
+							resultBlocks = append(resultBlocks, *media)
+						}
+					} else if cp.Type != canonical.PartText {
+						d.Note("tool_result.content", canonical.FidelityUnsupported, "tool result content %q cannot be expressed in Anthropic", cp.Type)
+					}
+				}
+				content := json.RawMessage(`""`)
+				var err error
+				if len(resultBlocks) == 1 && resultBlocks[0].Type == "text" {
+					content, err = json.Marshal(resultBlocks[0].Text)
+				} else if len(resultBlocks) > 0 {
+					content, err = json.Marshal(resultBlocks)
+				}
 				if err != nil {
 					return nil, fmt.Errorf("encode tool result: %w", err)
 				}

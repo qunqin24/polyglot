@@ -23,6 +23,7 @@ func (Codec) DecodeStream(ctx context.Context, r io.Reader, emit func(*canonical
 		started     bool
 		usage       canonical.Usage
 		finish      canonical.FinishReason
+		sawStop     bool
 		toolBlock   = map[int]bool{}
 		nativeBlock = map[int]bool{}
 	)
@@ -177,8 +178,7 @@ func (Codec) DecodeStream(ctx context.Context, r io.Reader, emit func(*canonical
 			}
 
 		case "message_stop":
-			// Handled below, after the loop, so a stream that ends without it
-			// still produces a terminal event.
+			sawStop = true
 
 		case "error":
 			if ev.Error != nil {
@@ -196,6 +196,9 @@ func (Codec) DecodeStream(ctx context.Context, r io.Reader, emit func(*canonical
 
 	if !started {
 		return canonical.Errorf(canonical.ErrUpstream, "upstream closed the stream without sending any data")
+	}
+	if !sawStop {
+		return canonical.Errorf(canonical.ErrUpstream, "upstream closed the stream before message_stop")
 	}
 	if err := emit(&canonical.Event{Type: canonical.EventUsage, Usage: &usage}); err != nil {
 		return err
@@ -240,9 +243,18 @@ type streamEncoder struct {
 	started      bool
 	finished     bool
 	closed       bool
+	failed       bool
+	pendingTools map[int]*pendingTool
+	pendingOrder []int
 	usage        canonical.Usage
 	finish       canonical.FinishReason
 	nativeBlocks map[int]int
+}
+
+type pendingTool struct {
+	ev   *canonical.Event
+	args string
+	done bool
 }
 
 func (Codec) NewStreamEncoder(w io.Writer, req *canonical.Request) protocol.StreamEncoder {
@@ -260,6 +272,7 @@ func (Codec) NewStreamEncoder(w io.Writer, req *canonical.Request) protocol.Stre
 		openBlock:    -1,
 		finish:       canonical.FinishStop,
 		nativeBlocks: map[int]int{},
+		pendingTools: map[int]*pendingTool{},
 	}
 }
 
@@ -337,7 +350,11 @@ func (e *streamEncoder) openFor(canonicalIdx int, kind string, tc *canonical.Eve
 	case "text":
 		cb = map[string]any{"type": "text", "text": ""}
 	case "thinking":
-		cb = map[string]any{"type": "thinking", "thinking": "", "signature": ""}
+		if tc != nil && tc.Reasoning != nil && tc.Reasoning.Redacted != "" {
+			cb = map[string]any{"type": "redacted_thinking", "data": tc.Reasoning.Redacted}
+		} else {
+			cb = map[string]any{"type": "thinking", "thinking": "", "signature": ""}
+		}
 	case "tool_use":
 		cb = map[string]any{
 			"type":  "tool_use",
@@ -412,26 +429,28 @@ func (e *streamEncoder) Write(ev *canonical.Event) error {
 		if err := e.ensureStart(); err != nil {
 			return err
 		}
-		_, err := e.openFor(ev.Index, "tool_use", ev)
-		return err
+		e.pendingTools[ev.Index] = &pendingTool{ev: ev}
+		e.pendingOrder = append(e.pendingOrder, ev.Index)
+		return nil
 
 	case canonical.EventToolCallDelta:
 		if ev.ArgumentsDelta == "" {
 			return nil
 		}
-		if err := e.ensureStart(); err != nil {
-			return err
+		p := e.pendingTools[ev.Index]
+		if p == nil {
+			p = &pendingTool{ev: ev}
+			e.pendingTools[ev.Index] = p
+			e.pendingOrder = append(e.pendingOrder, ev.Index)
 		}
-		idx, err := e.openFor(ev.Index, "tool_use", ev)
-		if err != nil {
-			return err
-		}
-		return e.send("content_block_delta", map[string]any{
-			"type": "content_block_delta", "index": idx,
-			"delta": map[string]any{"type": "input_json_delta", "partial_json": ev.ArgumentsDelta},
-		})
+		p.args += ev.ArgumentsDelta
+		return nil
 
 	case canonical.EventToolCallEnd:
+		if p := e.pendingTools[ev.Index]; p != nil {
+			p.done = true
+			return e.flushTools(false)
+		}
 		if idx, ok := e.blocks[ev.Index]; ok && idx == e.openBlock {
 			return e.closeOpenBlock()
 		}
@@ -453,6 +472,12 @@ func (e *streamEncoder) Write(ev *canonical.Event) error {
 		return nil
 
 	case canonical.EventMessageEnd:
+		if e.failed {
+			return nil
+		}
+		if err := e.flushTools(true); err != nil {
+			return err
+		}
 		if err := e.ensureStart(); err != nil {
 			return err
 		}
@@ -466,10 +491,39 @@ func (e *streamEncoder) Write(ev *canonical.Event) error {
 		return e.emitEnd()
 
 	case canonical.EventError:
+		e.failed = true
 		if ev.Error == nil {
 			return nil
 		}
 		return e.w.Event("error", Codec{}.EncodeError(ev.Error))
+	}
+	return nil
+}
+
+// Anthropic emits one complete block at a time. Hold parallel tool arguments
+// until earlier calls finish, then replay them in their original order.
+func (e *streamEncoder) flushTools(force bool) error {
+	for len(e.pendingOrder) > 0 {
+		index := e.pendingOrder[0]
+		p := e.pendingTools[index]
+		if !force && !p.done {
+			break
+		}
+		idx, err := e.openFor(index, "tool_use", p.ev)
+		if err != nil {
+			return err
+		}
+		if p.args != "" {
+			if err := e.send("content_block_delta", map[string]any{"type": "content_block_delta", "index": idx,
+				"delta": map[string]any{"type": "input_json_delta", "partial_json": p.args}}); err != nil {
+				return err
+			}
+		}
+		if err := e.closeOpenBlock(); err != nil {
+			return err
+		}
+		delete(e.pendingTools, index)
+		e.pendingOrder = e.pendingOrder[1:]
 	}
 	return nil
 }
@@ -496,7 +550,7 @@ func (e *streamEncoder) Close() error {
 		return nil
 	}
 	e.closed = true
-	if e.finished {
+	if e.finished || e.failed {
 		return nil
 	}
 	if err := e.ensureStart(); err != nil {

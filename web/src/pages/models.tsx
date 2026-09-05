@@ -31,7 +31,7 @@ import { useToast } from "@/components/ui/toast";
 // anyone has to take.
 export function Models() {
   const t = useT();
-  const providers = useAsync(() => api.providers(), []);
+  const providers = useAsync(() => api.providers(), ["providers"]);
 
   return (
     <>
@@ -67,11 +67,11 @@ function Registry({ providers }: { providers: Provider[] }) {
 
   const { data, loading, error, reload } = useAsync(
     () => api.models({ provider_id: providerID, search, limit: 500 }),
-    [providerID, search],
+    ["models", providerID, search, 500],
   );
   // Loaded separately from the list: this is an aggregate over the request
   // log, and it must never be what decides whether the page appears.
-  const stats = useAsync(() => api.modelStats(24), []);
+  const stats = useAsync(() => api.modelStats(24), ["model-stats", 24]);
 
   // Keyed by provider *and* model. The same upstream id on two providers is
   // two different things to call, and telling them apart is the comparison

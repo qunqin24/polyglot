@@ -31,7 +31,7 @@ type SortKey = "recent" | "name" | "lastUsed";
 
 export function Keys() {
   const t = useT();
-  const { data, loading, error, reload } = useAsync(() => api.keys(), []);
+  const { data, loading, error, reload } = useAsync(() => api.keys(), ["keys"]);
   const { toast } = useToast();
 
   const [search, setSearch] = React.useState("");
@@ -554,7 +554,7 @@ function KeyDialog({
       }
     }
     return [...choices.values()].sort((a, b) => a.id.localeCompare(b.id));
-  }, [open, t]);
+  }, ["key-model-options", open, t("keys.registeredModel"), t("keys.modelAlias")]);
 
   React.useEffect(() => {
     if (!open) return;
@@ -1283,7 +1283,7 @@ function IssuedStep({ secret, name, policy }: { secret: string; name: string; po
   // key uses one of its own rather than whatever the install lists first.
   const fallback = useAsync(
     () => (policy.restrictModels ? Promise.resolve(null) : api.models({ limit: 1 })),
-    [policy.restrictModels],
+    ["key-example-model", policy.restrictModels],
   );
   const model = policy.restrictModels
     ? policy.allowedModels[0] ?? ""

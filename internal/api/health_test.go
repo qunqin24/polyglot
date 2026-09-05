@@ -151,7 +151,7 @@ func mustListProviders(t *testing.T, st *store.Store) []*store.Provider {
 	return list
 }
 
-// Auto-disable, end to end. It is opt-in because 401 and 403 are not always
+// Auto-disable, end to end. It is opt-in because 401s are not always
 // about the key — a region restriction or an exhausted quota reads the same —
 // so switching a provider off is the operator's decision.
 
@@ -210,6 +210,42 @@ func TestARejectedCredentialDisablesTheProviderWhenAskedTo(t *testing.T) {
 	readAll(t, h.post("/v1/chat/completions", chat("shared"), nil))
 	if rejected != before {
 		t.Errorf("a disabled provider was called again: %d -> %d", before, rejected)
+	}
+}
+
+func TestModelPermissionErrorsDoNotDisableTheProvider(t *testing.T) {
+	upstream := httptestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		io.WriteString(w, `{"error":{"message":"model access denied"}}`)
+	})
+	h := newHarness(t, nil, "openai", withSetup(func(t *testing.T, st *store.Store, first int64) {
+		ctx := context.Background()
+		p, err := st.CreateProvider(ctx, &store.Provider{
+			Name: "restricted", Protocol: "openai", BaseURL: upstream,
+			Enabled: true, Priority: 100, AutoDisableOnAuthError: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.CreateModel(ctx, &store.Model{
+			ProviderID: p.ID, UpstreamModelID: "restricted-model", Enabled: true,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}))
+	for range 3 {
+		resp := h.post("/v1/chat/completions", chat("restricted-model"), nil)
+		body := readAll(t, resp)
+		if resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("want upstream permission error, got %d: %s", resp.StatusCode, body)
+		}
+	}
+	p, err := h.store.ProviderByName(context.Background(), "restricted")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.Enabled || p.DisabledAt != nil || p.DisabledReason != "" {
+		t.Fatal("model permission errors disabled the provider")
 	}
 }
 

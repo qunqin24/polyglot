@@ -9,7 +9,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node scripts/timezone-offset.test.mjs",
+    "test": "node scripts/timezone-offset.test.mjs && node scripts/query-cache.test.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",

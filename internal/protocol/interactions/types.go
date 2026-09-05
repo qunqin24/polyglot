@@ -23,7 +23,7 @@ type interactionRequest struct {
 	Stream            bool   `json:"stream,omitempty"`
 
 	GenerationConfig *generationConfig `json:"generation_config,omitempty"`
-	ResponseFormat   []responseFormat  `json:"response_format,omitempty"`
+	ResponseFormat   json.RawMessage   `json:"response_format,omitempty"`
 
 	// Store asks Google to keep the conversation server-side, and defaults to
 	// true when the field is absent. Polyglot is stateless and always sends
@@ -40,12 +40,14 @@ type interactionRequest struct {
 }
 
 type generationConfig struct {
-	Temperature   *float64 `json:"temperature,omitempty"`
-	TopP          *float64 `json:"top_p,omitempty"`
-	MaxTokens     *int     `json:"max_output_tokens,omitempty"`
-	ThinkingLevel string   `json:"thinking_level,omitempty"`
-	Seed          *int64   `json:"seed,omitempty"`
-	StopSequences []string `json:"stop_sequences,omitempty"`
+	Temperature       *float64        `json:"temperature,omitempty"`
+	TopP              *float64        `json:"top_p,omitempty"`
+	MaxTokens         *int            `json:"max_output_tokens,omitempty"`
+	ThinkingLevel     string          `json:"thinking_level,omitempty"`
+	ThinkingSummaries string          `json:"thinking_summaries,omitempty"`
+	ToolChoice        json.RawMessage `json:"tool_choice,omitempty"`
+	Seed              *int64          `json:"seed,omitempty"`
+	StopSequences     []string        `json:"stop_sequences,omitempty"`
 }
 
 type responseFormat struct {

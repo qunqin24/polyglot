@@ -113,8 +113,8 @@ type SortKey = "priority" | "name" | "models";
 
 export function Providers() {
   const t = useT();
-  const { data, loading, error, reload } = useAsync(() => api.providers(), []);
-  const protocols = useAsync(() => api.protocols(), []);
+  const { data, loading, error, reload } = useAsync(() => api.providers(), ["providers"]);
+  const protocols = useAsync(() => api.protocols(), ["protocols"]);
   const { toast } = useToast();
 
   const [search, setSearch] = React.useState("");

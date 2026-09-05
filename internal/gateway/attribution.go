@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
-	"sort"
 	"strings"
 
 	"github.com/qunqin24/polyglot/internal/canonical"
@@ -99,17 +98,7 @@ func requestLabels(req *canonical.Request) string {
 	if req == nil || len(req.Metadata) == 0 {
 		return ""
 	}
-	keys := make([]string, 0, len(req.Metadata))
-	for k := range req.Metadata {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
-	ordered := make(map[string]string, len(keys))
-	for _, k := range keys {
-		ordered[k] = req.Metadata[k]
-	}
-	b, err := json.Marshal(ordered)
+	b, err := json.Marshal(req.Metadata)
 	if err != nil {
 		return ""
 	}

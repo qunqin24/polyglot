@@ -115,6 +115,10 @@ func (s *Server) webUIHandler() http.HandlerFunc {
 		if clean == "" || clean == "." {
 			clean = "index.html"
 		}
+		if clean == "index.html" {
+			serveIndex(w, r, assets)
+			return
+		}
 		if f, err := assets.Open(clean); err == nil {
 			f.Close()
 			if strings.HasPrefix(clean, "assets/") {

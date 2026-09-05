@@ -53,9 +53,9 @@ export function Overview() {
   const [hours, setHours] = React.useState("24");
   const windowHours = Number(hours);
 
-  const stats = useAsync(() => api.stats(windowHours), [hours]);
-  const providers = useAsync(() => api.providers(), []);
-  const keys = useAsync(() => api.keys(), []);
+  const stats = useAsync(() => api.stats(windowHours), ["stats", windowHours]);
+  const providers = useAsync(() => api.providers(), ["providers"]);
+  const keys = useAsync(() => api.keys(), ["keys"]);
 
   // The Overview is the page people leave open, so it refreshes itself. The
   // panels below refresh with it only in the sense that switching tabs
@@ -107,7 +107,7 @@ export function Overview() {
         <Stat
           label={t("overview.requests")}
           value={s ? formatNumber(s.total_requests) : "—"}
-          loading={stats.loading}
+          loading={stats.loading && !s}
           trend={s?.series.map((b) => b.count)}
         />
         {/* No sparkline under the next two. A bucket nobody called in has no
@@ -117,7 +117,7 @@ export function Overview() {
           label={t("overview.successRate")}
           value={successRate === null ? "—" : `${successRate.toFixed(1)}%`}
           tone={successRate !== null && successRate < 95 ? "warn" : undefined}
-          loading={stats.loading}
+          loading={stats.loading && !s}
           sub={
             s && s.error_count > 0
               ? t("overview.errorCount", { count: formatNumber(s.error_count) })
@@ -132,7 +132,7 @@ export function Overview() {
               ? t("overview.p95", { value: formatDuration(s.p95_latency_ms) })
               : undefined
           }
-          loading={stats.loading}
+          loading={stats.loading && !s}
         />
         {/* An estimate from a published price list, not a bill. The count of
             requests nobody could price sits under it, because a total with
@@ -145,7 +145,7 @@ export function Overview() {
               ? t("overview.costUnpriced", { count: formatNumber(s.unpriced_requests) })
               : undefined
           }
-          loading={stats.loading}
+          loading={stats.loading && !s}
           trend={s?.series.map((b) => b.cost_usd)}
           trendColor="var(--color-chart-3)"
         />
@@ -160,7 +160,7 @@ export function Overview() {
                 })
               : undefined
           }
-          loading={stats.loading}
+          loading={stats.loading && !s}
           trend={s?.series.map((b) => b.input_tokens + b.output_tokens)}
           trendColor="var(--color-chart-4)"
         />
@@ -203,7 +203,7 @@ export function Overview() {
 
           <div className="mt-4 border-t pt-3">
             <p className="mb-2 text-xs text-muted-foreground">{t("nav.providers")}</p>
-            {providers.loading ? (
+            {providers.loading && !providers.data ? (
               <Spinner className="text-muted-foreground" />
             ) : (providers.data?.length ?? 0) === 0 ? (
               <p className="text-sm text-muted-foreground">{t("overview.noProviders")}</p>
@@ -324,8 +324,8 @@ function PanelFrame({
  *  out, and what did not survive between them. */
 function ConversionPanel({ hours }: { hours: number }) {
   const t = useT();
-  const conv = useAsync(() => api.conversionStats(hours), [hours]);
-  const protocols = useAsync(() => api.protocols(), []);
+  const conv = useAsync(() => api.conversionStats(hours), ["conversion-stats", hours]);
+  const protocols = useAsync(() => api.protocols(), ["protocols"]);
 
   const c: ConversionStats | null = conv.data;
   const names = protocols.data?.map((p) => p.name) ?? [];
@@ -462,8 +462,8 @@ function fidelityTone(f: ConversionStats["fields"][number]["fidelity"]) {
  *  because an average is exactly the number that hides a bad tail. */
 function LatencyPanel({ hours }: { hours: number }) {
   const t = useT();
-  const lat = useAsync(() => api.latencyStats(hours), [hours]);
-  const models = useAsync(() => api.modelStats(hours), [hours]);
+  const lat = useAsync(() => api.latencyStats(hours), ["latency-stats", hours]);
+  const models = useAsync(() => api.modelStats(hours), ["model-stats", hours]);
 
   const l: LatencyStats | null = lat.data;
   const requests = l?.series.reduce((sum, p) => sum + p.count, 0) ?? 0;
@@ -614,7 +614,7 @@ function LatencyPanel({ hours }: { hours: number }) {
  *  beside it rather than quietly added in as free. */
 function CostPanel({ hours, keys }: { hours: number; keys: APIKey[] }) {
   const t = useT();
-  const cost = useAsync(() => api.costStats(hours), [hours]);
+  const cost = useAsync(() => api.costStats(hours), ["cost-stats", hours]);
   const c: CostStats | null = cost.data;
 
   const budgeted = keys.filter((k) => k.budget_usd !== null && k.budget_usd > 0);

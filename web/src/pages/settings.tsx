@@ -1,4 +1,5 @@
 import * as React from "react";
+import { ContentLogSettings } from "@/components/content-log-settings";
 import { api } from "@/lib/api";
 import { errorMessage, useTheme, type Theme } from "@/lib/hooks";
 import { useT, useI18n, LOCALES, type Locale } from "@/lib/i18n";
@@ -41,6 +42,7 @@ export function Settings() {
         <TabsList className="mb-4">
           <TabsTrigger value="general">{t("settings.tabGeneral")}</TabsTrigger>
           <TabsTrigger value="instance">{t("settings.tabInstance")}</TabsTrigger>
+          <TabsTrigger value="logging">{t("contentLogs.tab")}</TabsTrigger>
           <TabsTrigger value="account">{t("settings.tabAccount")}</TabsTrigger>
           <TabsTrigger value="endpoints">{t("settings.tabEndpoints")}</TabsTrigger>
         </TabsList>
@@ -110,6 +112,8 @@ export function Settings() {
             </CardContent>
           </Card>
         </TabsContent>
+
+        <TabsContent value="logging"><ContentLogSettings /></TabsContent>
 
         <TabsContent value="account">
           <PasswordCard onChanged={() => void signOut()} />

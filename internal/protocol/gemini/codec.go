@@ -84,6 +84,9 @@ func (Codec) DecodeRequest(body []byte, d *canonical.Diagnostics) (*canonical.Re
 			if tc.ThinkingBudget != nil && *tc.ThinkingBudget == 0 {
 				rc.Enabled = false
 			}
+			if tc.ThinkingLevel != "" {
+				rc.Effort = canonical.ReasoningEffort(strings.ToLower(tc.ThinkingLevel))
+			}
 			req.Reasoning = rc
 		}
 	}
@@ -100,10 +103,14 @@ func (Codec) DecodeRequest(body []byte, d *canonical.Diagnostics) (*canonical.Re
 		}
 		for _, fd := range t.FunctionDeclarations {
 			req.Tools = append(req.Tools, canonical.Tool{
-				Name:        fd.Name,
-				Description: fd.Description,
-				Parameters:  fd.Parameters,
+				Name:                 fd.Name,
+				Description:          fd.Description,
+				Parameters:           fd.Parameters,
+				ParametersJSONSchema: len(fd.ParametersJSONSchema) > 0,
 			})
+			if len(fd.Parameters) == 0 {
+				req.Tools[len(req.Tools)-1].Parameters = fd.ParametersJSONSchema
+			}
 		}
 	}
 	if in.ToolConfig != nil && in.ToolConfig.FunctionCallingConfig != nil {
@@ -350,6 +357,16 @@ func (Codec) EncodeRequest(req *canonical.Request, d *canonical.Diagnostics) ([]
 	}
 	if req.Reasoning != nil {
 		tc := &thinkingConfig{IncludeThoughts: req.Reasoning.Visible}
+		switch req.Reasoning.Effort {
+		case canonical.EffortMinimal:
+			tc.ThinkingLevel = "MINIMAL"
+		case canonical.EffortLow:
+			tc.ThinkingLevel = "LOW"
+		case canonical.EffortMedium:
+			tc.ThinkingLevel = "MEDIUM"
+		case canonical.EffortHigh:
+			tc.ThinkingLevel = "HIGH"
+		}
 		switch {
 		case !req.Reasoning.Enabled:
 			zero := 0
@@ -358,10 +375,14 @@ func (Codec) EncodeRequest(req *canonical.Request, d *canonical.Diagnostics) ([]
 			b := *req.Reasoning.BudgetTokens
 			tc.ThinkingBudget = &b
 		case req.Reasoning.Effort != "":
-			b := budgetForEffort(req.Reasoning.Effort)
-			tc.ThinkingBudget = &b
-			d.Note("reasoning.effort", canonical.FidelityLossy,
-				"reasoning_effort=%q was approximated as a thinking budget of %d tokens", req.Reasoning.Effort, b)
+			if tc.ThinkingLevel == "" {
+				b := budgetForEffort(req.Reasoning.Effort)
+				tc.ThinkingBudget = &b
+				d.Note("reasoning.effort", canonical.FidelityLossy, "reasoning_effort=%q was approximated as a thinking budget of %d tokens", req.Reasoning.Effort, b)
+			}
+		}
+		if tc.ThinkingBudget != nil {
+			tc.ThinkingLevel = ""
 		}
 		gc.ThinkingConfig = tc
 	}
@@ -372,11 +393,12 @@ func (Codec) EncodeRequest(req *canonical.Request, d *canonical.Diagnostics) ([]
 	if len(req.Tools) > 0 {
 		decls := make([]functionDeclaration, 0, len(req.Tools))
 		for _, t := range req.Tools {
-			decls = append(decls, functionDeclaration{
-				Name:        t.Name,
-				Description: t.Description,
-				Parameters:  t.Parameters,
-			})
+			decl := functionDeclaration{Name: t.Name, Description: t.Description, Parameters: t.Parameters}
+			if t.ParametersJSONSchema {
+				decl.Parameters = nil
+				decl.ParametersJSONSchema = t.Parameters
+			}
+			decls = append(decls, decl)
 		}
 		out.Tools = []wireTool{{FunctionDeclarations: decls}}
 	}
@@ -706,7 +728,7 @@ func (Codec) EncodeResponse(resp *canonical.Response, req *canonical.Request, d 
 		CreateTime:   created.UTC().Format(time.RFC3339Nano),
 		UsageMetadata: &usageMetadata{
 			PromptTokenCount:        resp.Usage.InputTokens,
-			CandidatesTokenCount:    resp.Usage.OutputTokens,
+			CandidatesTokenCount:    max(0, resp.Usage.OutputTokens-resp.Usage.ReasoningTokens),
 			TotalTokenCount:         resp.Usage.InputTokens + resp.Usage.OutputTokens,
 			ThoughtsTokenCount:      resp.Usage.ReasoningTokens,
 			CachedContentTokenCount: resp.Usage.CachedInputTokens,

@@ -28,6 +28,7 @@ func (Codec) DecodeStream(ctx context.Context, r io.Reader, emit func(*canonical
 		usage      canonical.Usage
 		finish     canonical.FinishReason
 		sawFinish  bool
+		sawError   bool
 		toolItem   = map[int]bool{} // output_index -> is a function_call
 		nativeItem = map[int]bool{}
 	)
@@ -166,11 +167,15 @@ func (Codec) DecodeStream(ctx context.Context, r io.Reader, emit func(*canonical
 			finish = finishFor(*ev.Response, hasTool)
 			sawFinish = true
 			if ev.Response.Error != nil && ev.Response.Error.Message != "" {
-				return emit(&canonical.Event{Type: canonical.EventError, Error: &canonical.Error{
+				errEv := &canonical.Event{Type: canonical.EventError, Error: &canonical.Error{
 					Type:    canonical.ErrUpstream,
 					Message: ev.Response.Error.Message,
 					Code:    ev.Response.Error.Code,
-				}})
+				}}
+				sawError = true
+				if err := emit(errEv); err != nil {
+					return err
+				}
 			}
 
 		case "error":
@@ -179,9 +184,13 @@ func (Codec) DecodeStream(ctx context.Context, r io.Reader, emit func(*canonical
 				msg = ev.Response.Error.Message
 			}
 			if msg != "" {
-				return emit(&canonical.Event{Type: canonical.EventError, Error: &canonical.Error{
+				errEv := &canonical.Event{Type: canonical.EventError, Error: &canonical.Error{
 					Type: canonical.ErrUpstream, Message: msg, Code: ev.Code,
-				}})
+				}}
+				sawError = true
+				if err := emit(errEv); err != nil {
+					return err
+				}
 			}
 
 		default:
@@ -196,11 +205,22 @@ func (Codec) DecodeStream(ctx context.Context, r io.Reader, emit func(*canonical
 	if !started {
 		return canonical.Errorf(canonical.ErrUpstream, "upstream closed the stream without sending any data")
 	}
+	// The error event is part of the stream contract; callers receive it via
+	// emit and can decide how to render it. Do not turn it into a second error.
+	if !sawFinish && !sawError {
+		return canonical.Errorf(canonical.ErrUpstream, "upstream closed the stream before response.completed")
+	}
+	if sawError {
+		if usage == (canonical.Usage{}) {
+			return nil
+		}
+		if err := emit(&canonical.Event{Type: canonical.EventUsage, Usage: &usage}); err != nil {
+			return err
+		}
+		return nil
+	}
 	if err := emit(&canonical.Event{Type: canonical.EventUsage, Usage: &usage}); err != nil {
 		return err
-	}
-	if !sawFinish {
-		finish = canonical.FinishStop
 	}
 	return emit(&canonical.Event{Type: canonical.EventMessageEnd, FinishReason: finish, Usage: &usage})
 }
@@ -228,6 +248,7 @@ type streamEncoder struct {
 	finish       canonical.FinishReason
 	started      bool
 	finished     bool
+	failed       bool
 	closed       bool
 	nativeOutput []item
 }
@@ -281,11 +302,6 @@ func (e *streamEncoder) sendNative(ev *canonical.NativeEvent) error {
 	delete(payload, "type")
 	delete(payload, "sequence_number")
 	if ev.Name == "response.output_item.added" {
-		if e.openIdx >= 0 {
-			if err := e.closeItem(e.items[e.openIdx]); err != nil {
-				return err
-			}
-		}
 		if raw, ok := payload["item"]; ok {
 			b, _ := json.Marshal(raw)
 			var it item
@@ -339,9 +355,7 @@ func (e *streamEncoder) open(canonicalIdx int, kind string, ev *canonical.Event)
 	if it, ok := e.items[canonicalIdx]; ok {
 		return it, nil
 	}
-	// A client reads output items as a sequence: each one is announced, filled
-	// and finished before the next appears. Close whatever is still open.
-	if e.openIdx >= 0 {
+	if e.openIdx >= 0 && e.items[e.openIdx].kind != "function_call" {
 		if err := e.closeItem(e.items[e.openIdx]); err != nil {
 			return nil, err
 		}
@@ -476,6 +490,9 @@ func (e *streamEncoder) Write(ev *canonical.Event) error {
 		return nil
 
 	case canonical.EventMessageEnd:
+		if e.failed {
+			return nil
+		}
 		if err := e.ensureStart(); err != nil {
 			return err
 		}
@@ -489,6 +506,7 @@ func (e *streamEncoder) Write(ev *canonical.Event) error {
 		return e.emitEnd()
 
 	case canonical.EventError:
+		e.failed = true
 		if ev.Error == nil {
 			return nil
 		}
@@ -595,6 +613,11 @@ func (e *streamEncoder) emitEnd() error {
 		OutputTokens: e.usage.OutputTokens,
 		TotalTokens:  e.usage.InputTokens + e.usage.OutputTokens,
 	}
+	if e.usage.CachedInputTokens > 0 {
+		usage.InputTokensDetails = &struct {
+			CachedTokens int `json:"cached_tokens"`
+		}{CachedTokens: e.usage.CachedInputTokens}
+	}
 	if e.usage.ReasoningTokens > 0 {
 		usage.OutputTokensDetails = &struct {
 			ReasoningTokens int `json:"reasoning_tokens"`
@@ -613,7 +636,7 @@ func (e *streamEncoder) Close() error {
 		return nil
 	}
 	e.closed = true
-	if e.finished {
+	if e.finished || e.failed {
 		return nil
 	}
 	if err := e.ensureStart(); err != nil {

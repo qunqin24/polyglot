@@ -52,6 +52,7 @@ export function Switch({ className, ...props }: React.ComponentProps<typeof Swit
 // --- select -----------------------------------------------------------------
 
 export function Select({
+  id,
   value,
   onValueChange,
   placeholder,
@@ -59,6 +60,7 @@ export function Select({
   className,
   disabled,
 }: {
+  id?: string;
   value: string;
   onValueChange: (v: string) => void;
   placeholder?: string;
@@ -72,6 +74,7 @@ export function Select({
   return (
     <SelectPrimitive.Root value={value} onValueChange={onValueChange} disabled={disabled}>
       <SelectPrimitive.Trigger
+        id={id}
         className={cn(
           "flex h-9 w-full items-center justify-between gap-2 rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs",
           "focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/25 outline-none",

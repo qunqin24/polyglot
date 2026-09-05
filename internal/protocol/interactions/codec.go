@@ -120,9 +120,67 @@ func (Codec) DecodeRequest(body []byte, d *canonical.Diagnostics) (*canonical.Re
 				Visible: true,
 			}
 		}
+		if gc.ThinkingSummaries != "" {
+			if gc.ThinkingSummaries != "auto" && gc.ThinkingSummaries != "none" {
+				return nil, canonical.Errorf(canonical.ErrInvalidRequest, "invalid thinking_summaries %q", gc.ThinkingSummaries)
+			}
+			if req.Reasoning == nil {
+				req.Reasoning = &canonical.ReasoningConfig{Enabled: true}
+			}
+			req.Reasoning.Visible = gc.ThinkingSummaries == "auto"
+		}
+		if len(gc.ToolChoice) > 0 {
+			var choice string
+			if err := json.Unmarshal(gc.ToolChoice, &choice); err != nil {
+				var obj struct {
+					AllowedTools *struct {
+						Mode  string   `json:"mode"`
+						Tools []string `json:"tools"`
+					} `json:"allowed_tools"`
+				}
+				if err := json.Unmarshal(gc.ToolChoice, &obj); err != nil || obj.AllowedTools == nil {
+					return nil, canonical.Errorf(canonical.ErrInvalidRequest, "tool_choice must be a mode or allowed_tools object")
+				}
+				choice = obj.AllowedTools.Mode
+				if choice == "" {
+					choice = "auto"
+				}
+				if choice == "any" && len(obj.AllowedTools.Tools) == 1 {
+					req.ToolChoice = &canonical.ToolChoice{Mode: canonical.ToolChoiceSpecific, Name: obj.AllowedTools.Tools[0]}
+				} else {
+					preserveToolChoice(req, gc.ToolChoice)
+				}
+			} else {
+				switch choice {
+				case "auto":
+					req.ToolChoice = &canonical.ToolChoice{Mode: canonical.ToolChoiceAuto}
+				case "none":
+					req.ToolChoice = &canonical.ToolChoice{Mode: canonical.ToolChoiceNone}
+				case "any":
+					req.ToolChoice = &canonical.ToolChoice{Mode: canonical.ToolChoiceRequired}
+				case "validated":
+					preserveToolChoice(req, gc.ToolChoice)
+				}
+			}
+			if choice != "auto" && choice != "none" && choice != "any" && choice != "validated" {
+				return nil, canonical.Errorf(canonical.ErrInvalidRequest, "unsupported tool_choice %q", choice)
+			}
+		}
 	}
 	if len(in.ResponseFormat) > 0 {
-		req.ResponseFormat = decodeResponseFormat(in.ResponseFormat, d)
+		var formats []responseFormat
+		if in.ResponseFormat[0] == '{' {
+			var one responseFormat
+			if err := json.Unmarshal(in.ResponseFormat, &one); err != nil {
+				return nil, canonical.Errorf(canonical.ErrInvalidRequest, "invalid response_format: %v", err)
+			}
+			formats = []responseFormat{one}
+		} else {
+			if err := json.Unmarshal(in.ResponseFormat, &formats); err != nil {
+				return nil, canonical.Errorf(canonical.ErrInvalidRequest, "invalid response_format: %v", err)
+			}
+		}
+		req.ResponseFormat = decodeResponseFormat(formats, d)
 	}
 
 	rawTools := protocol.RawArray(body, "tools")
@@ -178,14 +236,43 @@ func decodeInput(raw json.RawMessage, d *canonical.Diagnostics) ([]canonical.Mes
 		if err := json.Unmarshal(raw, &one); err != nil {
 			return nil, canonical.Errorf(canonical.ErrInvalidRequest, "invalid 'input' object: %v", err)
 		}
+		if !isKnownInputStep(one.Type) {
+			var cb contentBlock
+			if e := json.Unmarshal(raw, &cb); e == nil && cb.Type != "" {
+				return []canonical.Message{{Role: canonical.RoleUser, Content: decodeContent([]contentBlock{cb}, d, "input")}}, nil
+			}
+		}
 		return stepsToMessages([]step{one}, d), nil
 	}
 
 	var steps []step
 	if err := json.Unmarshal(raw, &steps); err != nil {
-		return nil, canonical.Errorf(canonical.ErrInvalidRequest, "invalid 'input' array: %v", err)
+		var blocks []contentBlock
+		if e := json.Unmarshal(raw, &blocks); e != nil {
+			return nil, canonical.Errorf(canonical.ErrInvalidRequest, "invalid 'input' array: %v", err)
+		}
+		return []canonical.Message{{Role: canonical.RoleUser, Content: decodeContent(blocks, d, "input")}}, nil
+	}
+	if len(steps) > 0 && (steps[0].Type == "" || !isKnownInputStep(steps[0].Type)) {
+		var blocks []contentBlock
+		if e := json.Unmarshal(raw, &blocks); e == nil {
+			return []canonical.Message{{Role: canonical.RoleUser, Content: decodeContent(blocks, d, "input")}}, nil
+		}
 	}
 	return stepsToMessages(steps, d), nil
+}
+
+// Controls without a portable equivalent stay native. Merge reports them
+// explicitly when routing to a different protocol.
+func preserveToolChoice(req *canonical.Request, raw json.RawMessage) {
+	if req.Extensions == nil {
+		req.Extensions = &canonical.Extensions{Protocol: string(protocol.GeminiInteractions)}
+	}
+	req.Extensions.Items = append(req.Extensions.Items, canonical.Extension{Path: "generation_config", Name: "tool_choice", Value: raw})
+}
+
+func isKnownInputStep(t string) bool {
+	return t == stepUserInput || t == stepModelOutput || t == stepThought || t == stepFunctionCall || t == stepFunctionResult || isBuiltinStep(t)
 }
 
 // stepsToMessages folds a step timeline into canonical messages.
@@ -458,8 +545,13 @@ func (Codec) EncodeRequest(req *canonical.Request, d *canonical.Diagnostics) ([]
 		StopSequences: req.Stop,
 	}
 	if req.Reasoning != nil {
+		gc.ThinkingSummaries = "none"
+		if req.Reasoning.Visible {
+			gc.ThinkingSummaries = "auto"
+		}
 		if !req.Reasoning.Enabled {
-			gc.ThinkingLevel = "off"
+			gc.ThinkingLevel = "minimal"
+			d.Note("reasoning.enabled", canonical.FidelityLossy, "Interactions cannot disable thinking; the minimal level was requested")
 		} else if lvl := effortToThinking(req.Reasoning.Effort); lvl != "" {
 			gc.ThinkingLevel = lvl
 		}
@@ -470,7 +562,7 @@ func (Codec) EncodeRequest(req *canonical.Request, d *canonical.Diagnostics) ([]
 		}
 	}
 	if gc.Temperature != nil || gc.TopP != nil || gc.MaxTokens != nil || gc.Seed != nil ||
-		len(gc.StopSequences) > 0 || gc.ThinkingLevel != "" {
+		len(gc.StopSequences) > 0 || gc.ThinkingLevel != "" || gc.ThinkingSummaries != "" || len(gc.ToolChoice) > 0 {
 		out.GenerationConfig = &gc
 	}
 	if req.TopK != nil {
@@ -483,13 +575,13 @@ func (Codec) EncodeRequest(req *canonical.Request, d *canonical.Diagnostics) ([]
 	if rf := req.ResponseFormat; rf != nil {
 		switch rf.Type {
 		case canonical.FormatJSONSchema:
-			out.ResponseFormat = []responseFormat{{
+			out.ResponseFormat, _ = json.Marshal([]responseFormat{{
 				Type: "text", MIMEType: "application/json", Schema: rf.Schema,
-			}}
+			}})
 		case canonical.FormatJSONObject:
-			out.ResponseFormat = []responseFormat{{Type: "text", MIMEType: "application/json"}}
+			out.ResponseFormat, _ = json.Marshal([]responseFormat{{Type: "text", MIMEType: "application/json"}})
 		case canonical.FormatText:
-			out.ResponseFormat = []responseFormat{{Type: "text"}}
+			out.ResponseFormat, _ = json.Marshal([]responseFormat{{Type: "text"}})
 		}
 	}
 
@@ -498,9 +590,18 @@ func (Codec) EncodeRequest(req *canonical.Request, d *canonical.Diagnostics) ([]
 			Type: "function", Name: t.Name, Description: t.Description, Parameters: t.Parameters,
 		})
 	}
-	if req.ToolChoice != nil && req.ToolChoice.Mode != canonical.ToolChoiceAuto {
-		d.Note("tool_choice", canonical.FidelityUnsupported,
-			"Interactions has no tool choice control; the model decides")
+	if req.ToolChoice != nil {
+		switch req.ToolChoice.Mode {
+		case canonical.ToolChoiceNone:
+			gc.ToolChoice = json.RawMessage(`"none"`)
+		case canonical.ToolChoiceAuto:
+			gc.ToolChoice = json.RawMessage(`"auto"`)
+		case canonical.ToolChoiceRequired:
+			gc.ToolChoice = json.RawMessage(`"any"`)
+		case canonical.ToolChoiceSpecific:
+			gc.ToolChoice, _ = json.Marshal(map[string]any{"allowed_tools": map[string]any{"mode": "any", "tools": []string{req.ToolChoice.Name}}})
+		}
+		out.GenerationConfig = &gc
 	}
 
 	steps, err := encodeInput(req.Messages, d)
@@ -717,6 +818,7 @@ func (Codec) DecodeResponse(body []byte, d *canonical.Diagnostics) (*canonical.R
 			ReasoningTokens:   in.Usage.TotalThoughtTokens,
 			CachedInputTokens: in.Usage.TotalCachedTokens,
 		}
+		resp.Usage.OutputTokens += resp.Usage.ReasoningTokens
 	}
 
 	msg := canonical.Message{Role: canonical.RoleAssistant}
@@ -789,11 +891,10 @@ func (Codec) EncodeResponse(resp *canonical.Response, req *canonical.Request, d 
 		Created: created.UTC().Format(time.RFC3339Nano),
 		Usage: &usage{
 			TotalInputTokens:   resp.Usage.InputTokens,
-			TotalOutputTokens:  resp.Usage.OutputTokens,
+			TotalOutputTokens:  max(0, resp.Usage.OutputTokens-resp.Usage.ReasoningTokens),
 			TotalThoughtTokens: resp.Usage.ReasoningTokens,
 			TotalCachedTokens:  resp.Usage.CachedInputTokens,
-			TotalTokens: resp.Usage.InputTokens + resp.Usage.OutputTokens +
-				resp.Usage.ReasoningTokens,
+			TotalTokens:        resp.Usage.InputTokens + resp.Usage.OutputTokens,
 		},
 	}
 

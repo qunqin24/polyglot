@@ -13,11 +13,13 @@ import (
 // RequestLog is one completed gateway request. Polyglot writes exactly one of
 // these per request, never one per streamed chunk.
 type RequestLog struct {
-	ID         int64     `json:"id"`
-	RequestID  string    `json:"request_id"`
-	StartedAt  time.Time `json:"started_at"`
-	FinishedAt time.Time `json:"finished_at"`
-	LatencyMS  int64     `json:"latency_ms"`
+	ID           int64     `json:"id"`
+	ContentID    string    `json:"content_id,omitempty"`
+	ContentError string    `json:"content_error,omitempty"`
+	RequestID    string    `json:"request_id"`
+	StartedAt    time.Time `json:"started_at"`
+	FinishedAt   time.Time `json:"finished_at"`
+	LatencyMS    int64     `json:"latency_ms"`
 	// TTFTMS is the time to the first content-bearing chunk of a streamed
 	// reply, measured from when Polyglot received the request. It is null for
 	// a buffered reply and for a stream that produced no content.
@@ -85,7 +87,7 @@ const logCols = `id, request_id, started_at, finished_at, latency_ms, ttft_ms, g
 	api_key_id, api_key_name, client_ip, client_app, request_user, request_metadata,
 	stream, input_tokens, output_tokens, cached_input_tokens, cache_write_tokens, reasoning_tokens,
 	retry_count, fallback_count, error_type, error_message, fidelity_notes,
-	cost_usd, cost_source, cost_note`
+	cost_usd, cost_source, cost_note, content_id, content_error`
 
 func scanLog(sc interface{ Scan(...any) error }) (*RequestLog, error) {
 	var (
@@ -106,7 +108,7 @@ func scanLog(sc interface{ Scan(...any) error }) (*RequestLog, error) {
 		&apiKeyID, &l.APIKeyName, &l.ClientIP, &l.ClientApp, &l.RequestUser, &l.RequestMetadata,
 		&stream, &l.InputTokens, &l.OutputTokens, &l.CachedInputTokens, &l.CacheWriteTokens, &l.ReasoningTokens,
 		&l.RetryCount, &l.FallbackCount, &l.ErrorType, &l.ErrorMessage, &l.FidelityNotes,
-		&cost, &l.CostSource, &l.CostNote)
+		&cost, &l.CostSource, &l.CostNote, &l.ContentID, &l.ContentError)
 	if err != nil {
 		return nil, err
 	}
@@ -160,8 +162,8 @@ func (s *Store) InsertRequestLogs(ctx context.Context, logs []*RequestLog) error
 		api_key_id, api_key_name, client_ip, client_app, request_user, request_metadata,
 		stream, input_tokens, output_tokens, cached_input_tokens, cache_write_tokens, reasoning_tokens,
 		retry_count, fallback_count, error_type, error_message, fidelity_notes,
-		cost_usd, cost_source, cost_note
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		cost_usd, cost_source, cost_note, content_id, content_error
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return fmt.Errorf("prepare log insert: %w", err)
 	}
@@ -179,7 +181,7 @@ func (s *Store) InsertRequestLogs(ctx context.Context, logs []*RequestLog) error
 			l.InputTokens, l.OutputTokens, l.CachedInputTokens, l.CacheWriteTokens, l.ReasoningTokens,
 			l.RetryCount, l.FallbackCount,
 			l.ErrorType, truncate(l.ErrorMessage, 2000), l.FidelityNotes,
-			nullFloat64(l.CostUSD), l.CostSource, l.CostNote)
+			nullFloat64(l.CostUSD), l.CostSource, l.CostNote, l.ContentID, l.ContentError)
 		if err != nil {
 			return fmt.Errorf("insert request log: %w", err)
 		}
@@ -191,20 +193,39 @@ func (s *Store) InsertRequestLogs(ctx context.Context, logs []*RequestLog) error
 }
 
 type LogFilter struct {
-	Limit      int
-	Offset     int
-	Before     int64 // id cursor; 0 means newest
-	Status     string
-	ProviderID int64
-	Model      string
-	Protocol   string
-	ClientIP   string
-	ClientApp  string
+	RequestID   string
+	Since       time.Time
+	Until       time.Time
+	WithContent bool
+	Limit       int
+	Offset      int
+	Before      int64 // id cursor; 0 means newest
+	Status      string
+	ProviderID  int64
+	Model       string
+	Protocol    string
+	ClientIP    string
+	ClientApp   string
 }
 
 func logFilterWhere(f LogFilter) (string, []any) {
 	var where []string
 	var args []any
+	if f.RequestID != "" {
+		where = append(where, "request_id = ?")
+		args = append(args, f.RequestID)
+	}
+	if !f.Since.IsZero() {
+		where = append(where, "started_at >= ?")
+		args = append(args, f.Since.UnixMilli())
+	}
+	if !f.Until.IsZero() {
+		where = append(where, "started_at < ?")
+		args = append(args, f.Until.UnixMilli())
+	}
+	if f.WithContent {
+		where = append(where, "content_id != ''")
+	}
 	if f.Before > 0 {
 		where = append(where, "id < ?")
 		args = append(args, f.Before)

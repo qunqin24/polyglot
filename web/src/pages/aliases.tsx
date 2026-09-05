@@ -27,7 +27,7 @@ import { useToast } from "@/components/ui/toast";
 export function Aliases({ providers }: { providers: Provider[] }) {
   const t = useT();
   const { toast } = useToast();
-  const { data, loading, error, reload } = useAsync(() => api.aliases(), []);
+  const { data, loading, error, reload } = useAsync(() => api.aliases(), ["aliases"]);
 
   const [open, setOpen] = React.useState(false);
   const [editing, setEditing] = React.useState<ModelAlias | null>(null);
@@ -224,7 +224,7 @@ function AliasDialog({
   // target is picked rather than typed from memory.
   const models = useAsync(
     () => (providerID ? api.models({ provider_id: providerID, limit: 500 }) : Promise.resolve(null)),
-    [providerID],
+    ["alias-models", providerID],
   );
 
   async function save(e: React.FormEvent) {

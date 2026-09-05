@@ -153,11 +153,23 @@ func (s *Server) Handler() http.Handler {
 
 	// --- admin API --------------------------------------------------------
 
+	compress := middleware.Compress(5)
 	r.Route("/api", func(r chi.Router) {
+		r.Use(compress)
 		r.Get("/setup", s.handleSetupStatus)
 		r.Post("/setup", s.handleSetup)
 		r.Post("/auth/login", s.handleLogin)
 		r.Post("/auth/logout", s.handleLogout)
+
+		r.Route("/logs/v1", func(r chi.Router) {
+			r.Use(s.logKeyAuth)
+			r.Get("/", s.handleLogAPIInfo)
+			r.Get("/requests", s.handleListLogs)
+			r.Get("/requests/{id}", s.handleGetLog)
+			r.Get("/requests/{id}/content", s.handleLogManifest)
+			r.Get("/requests/{id}/content/{stage}", s.handleLogContent)
+			r.Get("/requests/{id}/export", s.handleLogExport)
+		})
 
 		r.Group(func(r chi.Router) {
 			r.Use(auth.Admin(s.store))
@@ -218,6 +230,14 @@ func (s *Server) Handler() http.Handler {
 			r.Get("/keys/{id}/origins", s.handleKeyOrigins)
 			r.Post("/keys/{id}/secret", s.handleRevealKey)
 
+			r.Get("/content-logging", s.handleContentLogSettings)
+			r.Put("/content-logging", s.handleSetContentLogSettings)
+			r.Get("/log-keys", s.handleListLogKeys)
+			r.Post("/log-keys", s.handleCreateLogKey)
+			r.Delete("/log-keys/{id}", s.handleDeleteLogKey)
+			r.Get("/logs/{id}/content", s.handleLogManifest)
+			r.Get("/logs/{id}/content/{stage}", s.handleLogContent)
+			r.Get("/logs/{id}/export", s.handleLogExport)
 			r.Get("/logs", s.handleListLogs)
 			r.Get("/logs/{id}", s.handleGetLog)
 
@@ -225,7 +245,7 @@ func (s *Server) Handler() http.Handler {
 	})
 
 	// --- WebUI ------------------------------------------------------------
-	r.NotFound(s.webUIHandler())
+	r.NotFound(compress(s.webUIHandler()).ServeHTTP)
 
 	return r
 }

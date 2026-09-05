@@ -1,5 +1,6 @@
 // Typed client for Polyglot's admin API. Every mutating call carries the CSRF
 // token that the server set as a readable cookie.
+import { clearQueries, invalidateQueries } from "./query-cache";
 
 export type ProtocolName = "openai" | "openai-responses" | "anthropic" | "gemini";
 
@@ -202,6 +203,8 @@ export interface APIKeyPolicyInput {
 }
 
 export interface RequestLog {
+  content_id?: string;
+  content_error?: string;
   id: number;
   /** Ties this row to the server log lines, and to a trace when tracing is on. */
   request_id: string;
@@ -398,6 +401,44 @@ export interface CostStats {
   }[];
 }
 
+export interface ContentLogSettings {
+  enabled: boolean;
+  retention_days: 3 | 7 | 30;
+}
+export interface LogKey {
+  id: number;
+  name: string;
+  prefix: string;
+  created_at: string;
+  last_used_at: string | null;
+  expires_at: string | null;
+}
+export interface ContentStage {
+  id: string;
+  kind: string;
+  attempt?: number;
+  protocol?: string;
+  provider?: string;
+  method?: string;
+  url?: string;
+  headers?: Record<string, string[]>;
+  status?: number;
+  bytes: number;
+  complete: boolean;
+}
+export interface ContentManifest {
+  version: number;
+  complete: boolean;
+  stages: ContentStage[];
+}
+export interface ContentPage {
+  data: string;
+  next_offset: number;
+  total_bytes: number;
+  has_more: boolean;
+  complete: boolean;
+}
+
 export interface Me {
   username: string;
   created_at: string;
@@ -467,7 +508,13 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (!res.ok) {
     const message =
       (payload as { error?: string } | null)?.error ?? `Request failed (${res.status})`;
-    throw new ApiError(res.status, message);
+    const error = new ApiError(res.status, message);
+    if (res.status === 401) clearQueries(error);
+    throw error;
+  }
+  if (method !== "GET" && method !== "HEAD") {
+    if (path === "/api/setup" || path === "/api/auth/login" || path === "/api/auth/logout") clearQueries();
+    else if (!/\/(test|discover|secret)$/.test(path)) invalidateQueries();
   }
   return payload as T;
 }
@@ -601,6 +648,13 @@ export const api = {
       `/api/logs${qs ? "?" + qs : ""}`,
     );
   },
+  contentLogSettings: () => request<ContentLogSettings>("/api/content-logging"),
+  saveContentLogSettings: (input: ContentLogSettings) => request<ContentLogSettings>("/api/content-logging", { method: "PUT", body: body(input) }),
+  logKeys: () => request<LogKey[]>("/api/log-keys"),
+  createLogKey: (name: string) => request<{ key: LogKey; secret: string }>("/api/log-keys", { method: "POST", body: body({ name }) }),
+  deleteLogKey: (id: number) => request<{ ok: boolean }>(`/api/log-keys/${id}`, { method: "DELETE" }),
+  logManifest: (id: number) => request<ContentManifest>(`/api/logs/${id}/content`),
+  logContent: (id: number, stage: string, offset = 0) => request<ContentPage>(`/api/logs/${id}/content/${encodeURIComponent(stage)}?offset=${offset}&limit=262144`),
   log: (id: number) => request<RequestLogDetail>(`/api/logs/${id}`),
 
 };

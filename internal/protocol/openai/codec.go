@@ -91,7 +91,7 @@ func (Codec) DecodeRequest(body []byte, d *canonical.Diagnostics) (*canonical.Re
 			Name:        t.Function.Name,
 			Description: t.Function.Description,
 			Parameters:  t.Function.Parameters,
-			Strict:      t.Function.Strict,
+			Strict:      t.Function.Strict, StrictSet: true,
 		})
 	}
 	tc, err := decodeToolChoice(in.ToolChoice)

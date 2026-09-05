@@ -62,7 +62,7 @@ type wireTool struct {
 	Name        string          `json:"name,omitempty"`
 	Description string          `json:"description,omitempty"`
 	Parameters  json.RawMessage `json:"parameters,omitempty"`
-	Strict      bool            `json:"strict,omitempty"`
+	Strict      *bool           `json:"strict,omitempty"`
 }
 
 // item is the union used for both request input and response output.
@@ -84,7 +84,7 @@ type item struct {
 	ExtraContent *protocol.ExtraContent `json:"extra_content,omitempty"`
 
 	// function_call_output
-	Output string `json:"output,omitempty"`
+	Output json.RawMessage `json:"output,omitempty"`
 
 	// reasoning
 	Summary          []summaryPart `json:"summary,omitempty"`

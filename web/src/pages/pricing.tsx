@@ -41,7 +41,7 @@ export function Pricing() {
   const t = useT();
   const { toast } = useToast();
 
-  const providers = useAsync(() => api.providers(), []);
+  const providers = useAsync(() => api.providers(), ["providers"]);
   const [providerID, setProviderID] = React.useState("");
   const [filter, setFilter] = React.useState("");
   const [searchInput, setSearchInput] = React.useState("");
@@ -56,7 +56,7 @@ export function Pricing() {
 
   const { data, loading, error, reload } = useAsync(
     () => api.pricing({ provider_id: providerID, search, filter }),
-    [providerID, search, filter],
+    ["pricing", providerID, search, filter],
   );
 
   async function refreshCatalog() {

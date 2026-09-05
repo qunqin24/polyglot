@@ -10,8 +10,8 @@ import (
 	"github.com/qunqin24/polyglot/internal/store"
 )
 
-// logView is the wire shape of a request log. Polyglot stores no prompt or
-// completion text, so there is nothing here to redact.
+// logView contains request metadata. Opt-in payloads live behind the content
+// endpoints, so listing and paging logs never loads prompts or responses.
 //
 // Fidelity is always an array, never null: most requests convert cleanly and
 // have no notes at all.
@@ -21,14 +21,28 @@ type logView struct {
 }
 
 func (s *Server) handleListLogs(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	q := r.URL.Query()
 	f := store.LogFilter{
-		Status:    q.Get("status"),
-		Model:     q.Get("model"),
-		Protocol:  q.Get("protocol"),
-		ClientIP:  q.Get("client_ip"),
-		ClientApp: q.Get("client_app"),
+		Status:      q.Get("status"),
+		RequestID:   q.Get("request_id"),
+		WithContent: q.Get("with_content") == "true",
+		Model:       q.Get("model"),
+		Protocol:    q.Get("protocol"),
+		ClientIP:    q.Get("client_ip"),
+		ClientApp:   q.Get("client_app"),
 	}
+	for name, dst := range map[string]*time.Time{"since": &f.Since, "until": &f.Until} {
+		if v := q.Get(name); v != "" {
+			parsed, err := time.Parse(time.RFC3339, v)
+			if err != nil {
+				writeErr(w, 400, "%s must be RFC3339", name)
+				return
+			}
+			*dst = parsed
+		}
+	}
+
 	if v, err := strconv.Atoi(q.Get("limit")); err == nil {
 		f.Limit = v
 	}
@@ -63,6 +77,7 @@ func (s *Server) handleListLogs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetLog(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	id, err := idParam(r, "id")
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid log id")

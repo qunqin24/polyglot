@@ -32,6 +32,32 @@ func restrictedKey(t *testing.T, st *store.Store, p store.APIKeyPolicy) *store.A
 
 func pint(v int) *int { return &v }
 
+func TestKeysWithoutUsageLimitsNeedNoStore(t *testing.T) {
+	// Request policy alone does not require usage accounting.
+	limiter := NewKeyLimiter(nil)
+	key := &store.APIKey{ID: 1, MaxOutputTokens: pint(100), AllowedModels: []string{"coding"}}
+	lease, denied, err := limiter.Acquire(context.Background(), key)
+	if lease != nil || denied != nil || err != nil {
+		t.Fatalf("unlimited acquire: lease=%v denied=%v err=%v", lease, denied, err)
+	}
+}
+
+func TestEnablingLimitsLoadsEarlierUsage(t *testing.T) {
+	st := limitStore(t)
+	key := restrictedKey(t, st, store.APIKeyPolicy{})
+	limiter := NewKeyLimiter(st)
+	now := time.Now().UTC()
+	limiter.now = func() time.Time { return now }
+	if _, denied, err := limiter.Acquire(context.Background(), key); denied != nil || err != nil {
+		t.Fatalf("unlimited acquire: denied=%v err=%v", denied, err)
+	}
+	spend(t, st, key.ID, now, money(1))
+	key.RPM = pint(1)
+	if _, denied, err := limiter.Acquire(context.Background(), key); err != nil || denied == nil || denied.Dimension != "RPM" {
+		t.Fatalf("enabled limit ignored earlier usage: denied=%v err=%v", denied, err)
+	}
+}
+
 func TestRequestLimitsUseRollingWindows(t *testing.T) {
 	st := limitStore(t)
 	key := restrictedKey(t, st, store.APIKeyPolicy{RPM: pint(1)})

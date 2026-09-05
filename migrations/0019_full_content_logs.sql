@@ -1,0 +1,11 @@
+ALTER TABLE request_logs ADD COLUMN content_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE request_logs ADD COLUMN content_error TEXT NOT NULL DEFAULT '';
+CREATE TABLE log_keys (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ name TEXT NOT NULL UNIQUE,
+ token_hash TEXT NOT NULL UNIQUE,
+ prefix TEXT NOT NULL,
+ created_at INTEGER NOT NULL,
+ last_used_at INTEGER,
+ expires_at INTEGER
+);

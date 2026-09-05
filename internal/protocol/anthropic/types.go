@@ -23,7 +23,16 @@ type messagesRequest struct {
 	Tools         []wireTool      `json:"tools,omitempty"`
 	ToolChoice    *wireToolChoice `json:"tool_choice,omitempty"`
 	Thinking      *wireThinking   `json:"thinking,omitempty"`
+	OutputConfig  *outputConfig   `json:"output_config,omitempty"`
 	Metadata      *wireMetadata   `json:"metadata,omitempty"`
+}
+
+type outputConfig struct {
+	Format *outputFormat `json:"format,omitempty"`
+}
+type outputFormat struct {
+	Type   string          `json:"type"`
+	Schema json.RawMessage `json:"schema,omitempty"`
 }
 
 type wireMetadata struct {
@@ -41,6 +50,7 @@ type wireTool struct {
 	InputSchema  json.RawMessage `json:"input_schema,omitempty"`
 	Type         string          `json:"type,omitempty"`
 	CacheControl *cacheControl   `json:"cache_control,omitempty"`
+	Strict       *bool           `json:"strict,omitempty"`
 }
 
 // cacheControl is Anthropic's prompt-cache breakpoint. Only "ephemeral"

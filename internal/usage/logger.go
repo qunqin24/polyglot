@@ -71,6 +71,7 @@ func (l *Logger) Log(rec *store.RequestLog) {
 	select {
 	case l.ch <- rec:
 	default:
+		l.st.RemoveLogContent(rec.ContentID)
 		l.mu.Lock()
 		l.dropped++
 		n := l.dropped
@@ -96,13 +97,10 @@ func (l *Logger) Run(ctx context.Context) {
 	ticker := time.NewTicker(flushInterval)
 	defer ticker.Stop()
 
-	var prune <-chan time.Time
-	if l.retention > 0 {
-		pt := time.NewTicker(6 * time.Hour)
-		defer pt.Stop()
-		prune = pt.C
-		l.prune(ctx)
-	}
+	pt := time.NewTicker(time.Hour)
+	defer pt.Stop()
+	prune := pt.C
+	l.prune(ctx)
 
 	batch := make([]*store.RequestLog, 0, maxBatch)
 	flush := func(c context.Context) {
@@ -111,6 +109,12 @@ func (l *Logger) Run(ctx context.Context) {
 		}
 		if err := l.st.InsertRequestLogs(c, batch); err != nil {
 			l.log.Error("write request logs", "error", err, "count", len(batch))
+			l.mu.Lock()
+			l.dropped += int64(len(batch))
+			l.mu.Unlock()
+			for _, rec := range batch {
+				l.st.RemoveLogContent(rec.ContentID)
+			}
 		}
 		batch = batch[:0]
 	}
@@ -195,6 +199,9 @@ func (l *Logger) price(rec *store.RequestLog) {
 }
 
 func (l *Logger) prune(ctx context.Context) {
+	if err := l.st.PruneLogContents(); err != nil {
+		l.log.Error("prune content logs", "error", err)
+	}
 	if l.retention <= 0 {
 		return
 	}

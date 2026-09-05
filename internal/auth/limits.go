@@ -89,7 +89,14 @@ func (l *KeyLimiter) Acquire(ctx context.Context, key *store.APIKey) (*QuotaLeas
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	state := l.keys[key.ID]
+	// Keep existing state when limits are toggled off: in-flight leases and
+	// later re-enabling still need its usage. Never-limited keys need no state.
 	if state == nil {
+		if value(key.RPM) <= 0 && value(key.RPH) <= 0 && value(key.RPD) <= 0 &&
+			value(key.TPM) <= 0 && value(key.TPD) <= 0 && value(key.MaxConcurrent) <= 0 &&
+			(key.BudgetUSD == nil || *key.BudgetUSD <= 0) {
+			return nil, nil, nil
+		}
 		state = &keyUsage{}
 		l.keys[key.ID] = state
 	}

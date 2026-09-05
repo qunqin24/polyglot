@@ -23,6 +23,7 @@ import (
 
 	"github.com/qunqin24/polyglot/internal/auth"
 	"github.com/qunqin24/polyglot/internal/canonical"
+	"github.com/qunqin24/polyglot/internal/capture"
 	"github.com/qunqin24/polyglot/internal/config"
 	"github.com/qunqin24/polyglot/internal/media"
 	"github.com/qunqin24/polyglot/internal/protocol"
@@ -77,6 +78,21 @@ func (g *Gateway) Chat(w http.ResponseWriter, r *http.Request, opt Options) {
 		ClientProtocol: string(opt.ClientProtocol),
 		Status:         "error",
 	}
+	var content *capture.Recorder
+	if g.Store != nil && g.Store.ContentLogging().Enabled {
+		var err error
+		content, err = capture.New(g.Store.ContentDir())
+		if err != nil {
+			rec.ContentError = "could not create content log"
+			g.Log.Error("create content log", "request_id", rec.RequestID, "error", err)
+		} else {
+			rec.ContentID = content.ID
+			content.Start(capture.Stage{ID: "client.request", Kind: "client_request", Protocol: string(opt.ClientProtocol), Method: r.Method, URL: r.URL.String(), Headers: r.Header})
+			r.Body = content.Reader("client.request", r.Body)
+			w = content.Writer(w)
+		}
+	}
+
 	if key := auth.APIKeyFromContext(r.Context()); key != nil {
 		rec.APIKeyID = &key.ID
 		rec.APIKeyName = key.Name
@@ -85,6 +101,11 @@ func (g *Gateway) Chat(w http.ResponseWriter, r *http.Request, opt Options) {
 	rec.ClientApp = clientApp(r)
 	var lease *auth.QuotaLease
 	defer func() {
+		capture.FinishResponse(w)
+		if err := content.Close(); err != nil {
+			rec.ContentError = "content recording failed; payload may be incomplete"
+			g.Log.Error("close content log", "request_id", rec.RequestID, "error", err)
+		}
 		g.finish(rec, tel, started)
 		if lease != nil {
 			lease.Complete(rec.InputTokens + rec.OutputTokens)
@@ -156,6 +177,10 @@ func (g *Gateway) Chat(w http.ResponseWriter, r *http.Request, opt Options) {
 		return
 	}
 	rec.Stream = creq.Stream
+	if content != nil {
+		b, _ := json.Marshal(creq)
+		content.Body(capture.Stage{ID: "canonical.request", Kind: "canonical_request"}, b)
+	}
 	// The client's own labels, known only once the body is decoded. Three of
 	// the five protocols carry them and they were being dropped at the end of
 	// the request until now.
@@ -187,6 +212,8 @@ func (g *Gateway) Chat(w http.ResponseWriter, r *http.Request, opt Options) {
 	for i, cand := range candidates {
 		attempt := &attempt{
 			gw:          g,
+			content:     content,
+			number:      i + 1,
 			clientCodec: clientCodec,
 			diag:        diag,
 			creq:        creq,
@@ -278,6 +305,8 @@ type attemptResult struct {
 }
 
 type attempt struct {
+	content     *capture.Recorder
+	number      int
 	gw          *Gateway
 	clientCodec protocol.Codec
 	diag        *canonical.Diagnostics
@@ -293,6 +322,10 @@ type attempt struct {
 // fail closes the attempt's telemetry with an error class and returns the
 // result, so every early return from run reports the attempt exactly once.
 func (a *attempt) failed(err *canonical.Error, wrote bool) attemptResult {
+	if a.content != nil {
+		b, _ := json.Marshal(err)
+		a.content.Body(capture.Stage{ID: fmt.Sprintf("upstream.%d.error", a.number), Kind: "attempt_error", Attempt: a.number}, b)
+	}
 	a.tried.Failed(telemetry.ErrorClass(err))
 	a.gw.noteFailure(a.cand.Target, err)
 	return attemptResult{err: err, wrote: wrote}
@@ -313,7 +346,8 @@ func (g *Gateway) noteFailure(t *provider.Target, err *canonical.Error) {
 		return
 	}
 
-	authFailure := err.Type == canonical.ErrAuthentication || err.Type == canonical.ErrPermission
+	// A permission error can apply to just one model, not the credential.
+	authFailure := err.Type == canonical.ErrAuthentication
 	strikes := g.Health.Failed(t.ID, authFailure)
 
 	if !authFailure || !t.AutoDisableOnAuthError || strikes < provider.AuthStrikesBeforeDisable {
@@ -392,11 +426,15 @@ func (a *attempt) run(w http.ResponseWriter, r *http.Request) attemptResult {
 		return a.failed(canonical.Errorf(canonical.ErrInternal, "%v", err), false)
 	}
 
+	a.content.Body(capture.Stage{ID: fmt.Sprintf("upstream.%d.request", a.number), Kind: "upstream_request", Attempt: a.number, Protocol: string(t.Protocol), Provider: t.Name, Method: httpReq.Method, URL: httpReq.URL.String(), Headers: httpReq.Header}, upBody)
 	resp, err := g.Client.Do(httpReq)
 	if err != nil {
 		return a.failed(transportError(err, t), false)
 	}
 	defer resp.Body.Close()
+	responseID := fmt.Sprintf("upstream.%d.response", a.number)
+	a.content.Start(capture.Stage{ID: responseID, Kind: "upstream_response", Attempt: a.number, Protocol: string(t.Protocol), Provider: t.Name, Status: resp.StatusCode, Headers: resp.Header})
+	resp.Body = a.content.Reader(responseID, resp.Body)
 
 	if resp.StatusCode >= 400 {
 		return a.failed(g.upstreamError(resp, t), false)
@@ -418,6 +456,10 @@ func (a *attempt) bufferedResponse(w http.ResponseWriter, resp *http.Response, u
 	cresp, err := upCodec.DecodeResponse(raw, a.diag)
 	if err != nil {
 		return a.failed(toCanonicalError(err), false)
+	}
+	if a.content != nil {
+		b, _ := json.Marshal(cresp)
+		a.content.Body(capture.Stage{ID: fmt.Sprintf("upstream.%d.canonical", a.number), Kind: "canonical_response", Attempt: a.number}, b)
 	}
 	// Report the alias the client asked for, not the upstream name.
 	cresp.Model = a.creq.Model
@@ -465,8 +507,15 @@ func (a *attempt) streamResponse(w http.ResponseWriter, r *http.Request, resp *h
 
 	enc := a.clientCodec.NewStreamEncoder(w, a.creq)
 	acc := canonical.NewAccumulator()
+	var streamErr *canonical.Error
+	canonicalID := fmt.Sprintf("upstream.%d.canonical", a.number)
+	a.content.Start(capture.Stage{ID: canonicalID, Kind: "canonical_stream", Attempt: a.number})
 
 	err := upCodec.DecodeStream(r.Context(), resp.Body, func(ev *canonical.Event) error {
+		if a.content != nil {
+			b, _ := json.Marshal(ev)
+			a.content.Data(canonicalID, append(b, '\n'))
+		}
 		if ev.Type == canonical.EventNative && ev.Native != nil &&
 			ev.Native.Protocol != string(a.clientCodec.Name()) {
 			a.diag.Note("stream."+ev.Native.Name, canonical.FidelityUnsupported,
@@ -486,6 +535,9 @@ func (a *attempt) streamResponse(w http.ResponseWriter, r *http.Request, resp *h
 			ev.Model = a.creq.Model
 		}
 		acc.Add(ev)
+		if ev.Type == canonical.EventError && ev.Error != nil {
+			streamErr = ev.Error
+		}
 		if err := enc.Write(ev); err != nil {
 			// The client hung up; stop reading upstream immediately.
 			return fmt.Errorf("write to client: %w", err)
@@ -493,7 +545,13 @@ func (a *attempt) streamResponse(w http.ResponseWriter, r *http.Request, resp *h
 		return nil
 	})
 
+	if err == nil {
+		a.content.End(canonicalID)
+	}
 	final := acc.Response()
+	if err == nil && streamErr != nil {
+		err = streamErr
+	}
 	a.rec.InputTokens = final.Usage.InputTokens
 	a.rec.OutputTokens = final.Usage.OutputTokens
 	a.rec.ReasoningTokens = final.Usage.ReasoningTokens
@@ -520,7 +578,11 @@ func (a *attempt) streamResponse(w http.ResponseWriter, r *http.Request, resp *h
 		a.rec.ErrorType = string(cerr.Type)
 		a.rec.ErrorMessage = cerr.Message
 		// Report the failure inside the stream: the status line is long gone.
-		_ = enc.Write(&canonical.Event{Type: canonical.EventError, Error: cerr})
+		if streamErr == nil {
+			if streamErr == nil {
+				_ = enc.Write(&canonical.Event{Type: canonical.EventError, Error: cerr})
+			}
+		}
 		_ = enc.Close()
 		g.Log.Warn("stream failed after headers were sent",
 			"request_id", a.rec.RequestID, "provider", a.cand.Target.Name, "error", cerr.Message)

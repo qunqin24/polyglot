@@ -1,4 +1,5 @@
 import * as React from "react";
+import { LogContent } from "@/components/log-content";
 import { ScrollText, RefreshCw, ChevronDown } from "lucide-react";
 import { api, type FidelityNote, type RequestLog, type RequestLogDetail } from "@/lib/api";
 import { errorMessage, useAsync, useInterval } from "@/lib/hooks";
@@ -79,7 +80,7 @@ export function Logs() {
         client_ip: clientIP,
         client_app: clientApp,
       }),
-    [status, protocol, query, clientIP, clientApp, page, pageSize],
+    ["logs", status, protocol, query, clientIP, clientApp, page, pageSize],
   );
 
   // A filtered result set has its own page count, so filters always start at
@@ -92,8 +93,8 @@ export function Logs() {
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   React.useEffect(() => {
-    if (page > totalPages) setPage(totalPages);
-  }, [page, totalPages]);
+    if (data && page > totalPages) setPage(totalPages);
+  }, [data, page, totalPages]);
 
   React.useEffect(() => setPageInput(String(page)), [page]);
 
@@ -403,6 +404,7 @@ function LogDetail({ id, onClose }: { id: number | null; onClose: () => void }) 
       return;
     }
     let cancelled = false;
+    setLog(null); setError("");
     api
       .log(id)
       .then((l) => !cancelled && setLog(l))
@@ -519,6 +521,8 @@ function LogDetail({ id, onClose }: { id: number | null; onClose: () => void }) 
             <Detail label={t("logs.clientApp")} value={log.client_app || "—"} />
             <Detail label={t("logs.requestUser")} value={log.request_user || "—"} mono />
           </dl>
+
+          <LogContent key={log.id} log={log} />
 
           {log.error_message && (
             <div>

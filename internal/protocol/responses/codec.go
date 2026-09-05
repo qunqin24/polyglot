@@ -5,6 +5,7 @@ package responses
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -82,7 +83,7 @@ func (Codec) DecodeRequest(body []byte, d *canonical.Diagnostics) (*canonical.Re
 			Name:        t.Name,
 			Description: t.Description,
 			Parameters:  t.Parameters,
-			Strict:      t.Strict,
+			Strict:      t.Strict != nil && *t.Strict, StrictSet: t.Strict != nil,
 		})
 	}
 	tc, err := decodeToolChoice(in.ToolChoice)
@@ -150,15 +151,14 @@ func decodeInput(raw json.RawMessage, d *canonical.Diagnostics) ([]canonical.Mes
 			})
 
 		case "function_call_output":
+			parts, err := decodeContent(it.Output, d, where+".output")
+			if err != nil {
+				return nil, err
+			}
 			out = append(out, canonical.Message{
 				Role: canonical.RoleTool,
-				Content: []canonical.ContentPart{{
-					Type: canonical.PartToolResult,
-					ToolResult: &canonical.ToolResult{
-						ToolCallID: it.CallID,
-						Content:    []canonical.ContentPart{canonical.Text(it.Output)},
-					},
-				}},
+				Content: []canonical.ContentPart{{Type: canonical.PartToolResult,
+					ToolResult: &canonical.ToolResult{ToolCallID: it.CallID, Content: parts}}},
 			})
 
 		case "reasoning":
@@ -404,7 +404,12 @@ func (Codec) EncodeRequest(req *canonical.Request, d *canonical.Diagnostics) ([]
 			Name:        t.Name,
 			Description: t.Description,
 			Parameters:  t.Parameters,
-			Strict:      t.Strict,
+			Strict: func() *bool {
+				if t.StrictSet || t.Strict {
+					return &t.Strict
+				}
+				return nil
+			}(),
 		})
 	}
 	if req.ToolChoice != nil {
@@ -521,10 +526,34 @@ func encodeInput(msgs []canonical.Message, d *canonical.Diagnostics) ([]item, er
 				if p.ToolResult == nil {
 					continue
 				}
+				result := json.RawMessage(`""`)
+				var cps []contentPart
+				for _, cp := range p.ToolResult.Content {
+					switch cp.Type {
+					case canonical.PartText:
+						cps = append(cps, contentPart{Type: "input_text", Text: cp.Text})
+					case canonical.PartImage, canonical.PartFile:
+						if media := encodeMediaPart(cp, d, fmt.Sprintf("messages[%d].tool_result", i)); media != nil {
+							cps = append(cps, *media)
+						}
+					default:
+						d.Note("tool_result.content", canonical.FidelityUnsupported, "tool result content %q cannot be expressed in Responses", cp.Type)
+					}
+				}
+				if len(cps) > 0 {
+					if len(cps) == 1 && cps[0].Type == "input_text" {
+						result = json.RawMessage(strconv.Quote(cps[0].Text))
+					} else {
+						result, _ = json.Marshal(cps)
+					}
+				}
+				if len(p.ToolResult.Structured) > 0 {
+					result = json.RawMessage(strconv.Quote(string(p.ToolResult.Structured)))
+				}
 				out = append(out, item{
 					Type:   "function_call_output",
 					CallID: p.ToolResult.ToolCallID,
-					Output: joinText(p.ToolResult.Content),
+					Output: result,
 				})
 			}
 		}

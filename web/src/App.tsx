@@ -2,6 +2,7 @@ import * as React from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { api, type Me } from "@/lib/api";
 import { errorMessage } from "@/lib/hooks";
+import { clearQueries } from "@/lib/query-cache";
 import { setFormatTimeZone } from "@/lib/utils";
 import { Spinner } from "@/components/ui/misc";
 import { Layout } from "@/components/layout";
@@ -39,12 +40,13 @@ export function App() {
 
   const load = React.useCallback(async () => {
     try {
-      const status = await api.setupStatus();
-      if (status.needs_setup) {
+      const [status, identity] = await Promise.allSettled([api.setupStatus(), api.me()]);
+      if (status.status === "fulfilled" && status.value.needs_setup) {
         setSession({ state: "setup" });
         return;
       }
-      const me = await api.me();
+      if (identity.status === "rejected") throw identity.reason;
+      const me = identity.value;
       // Apply before the first render that shows a timestamp, so nothing is
       // painted in the wrong zone and then corrected.
       setFormatTimeZone(me.timezone);
@@ -59,6 +61,7 @@ export function App() {
   }, [load]);
 
   const signOut = React.useCallback(async () => {
+    clearQueries();
     try {
       await api.logout();
     } catch (e) {
