@@ -36,6 +36,24 @@ export function useSession(): SessionContext {
 }
 
 export function App() {
+  return (
+    <Routes>
+      <Route
+        path="/docs/*"
+        element={
+          <React.Suspense fallback={<div className="flex min-h-screen items-center justify-center"><Spinner className="size-5 text-muted-foreground" /></div>}>
+            <DocsPage />
+          </React.Suspense>
+        }
+      />
+      <Route path="*" element={<AdminApp />} />
+    </Routes>
+  );
+}
+
+const DocsPage = React.lazy(() => import("@/pages/docs"));
+
+function AdminApp() {
   const [session, setSession] = React.useState<Session>({ state: "loading" });
 
   const load = React.useCallback(async () => {

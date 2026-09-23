@@ -96,6 +96,16 @@ export const zh: Catalog = {
   "nav.keys": "API 密钥",
   "nav.logs": "日志",
   "nav.settings": "设置",
+  "nav.docs": "文档",
+  "docs.title": "文档",
+  "docs.overview": "概览与安装",
+  "docs.api": "API 调用",
+  "docs.logApi": "内容日志 API",
+  "docs.development": "开发指南",
+  "docs.performance": "WebUI 性能",
+  "docs.contents": "本页目录",
+  "docs.dashboard": "打开控制台",
+  "docs.otherLanguage": "这篇文档目前只有一种语言。",
 
   // --- auth -----------------------------------------------------------------
   "auth.setupTitle": "欢迎使用 Polyglot",
@@ -111,6 +121,7 @@ export const zh: Catalog = {
   "auth.passwordMismatch": "两次输入的密码不一致。",
   "auth.createAdmin": "创建管理员",
   "auth.signIn": "登录",
+  "auth.docsLink": "免登录查看文档",
   "auth.nextSteps": "接下来：添加供应商，然后创建 API 密钥。",
   "auth.timezoneDetected": "时间将按浏览器检测到的时区 {timezone} 显示，稍后可在设置中更改。",
 

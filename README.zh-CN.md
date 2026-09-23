@@ -369,7 +369,16 @@ Anthropic `thinking` 签名和 OpenAI Responses 推理项遵循同样的原则�
 `FETCH_REMOTE_MEDIA=true`，此时 Polyglot 下载并内联，带 SSRF 防护（私有 IP 拒
 绝、大小限制、类型校验、重定向限制）。
 
-音频已计划但尚未实现。`audio/*` 附件直接拒绝，不会伪装成文档转发。
+Google Gen AI Go SDK 客户端现在可以通过 Polyglot 的 WebSocket 使用实时音频、转写、
+打断和工具调用。先在 Gemini provider 上注册 `gemini-3.8-live`（也可以创建别名），
+再把 Go SDK 的 Gemini API `BaseURL` 指向 Polyglot，使用 `Live.Connect`。
+WebSocket 路径是
+`/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent`。
+SDK 的 `APIKey` 填 **Polyglot** 的 API key；上游使用 provider 自己的凭据。
+一次 Live 会话记一行请求日志；上游报告 token 时照常计价。当前仅支持 Gemini Live
+客户端连接 Gemini Live 上游，其它实时客户端协议尚未接入。
+
+五种普通 HTTP/SSE 协议里的 `audio/*` 附件仍直接拒绝，不会伪装成文档转发。
 
 ### 供应商内置工具
 
@@ -382,6 +391,8 @@ Gemini 的 `googleSearch`、Anthropic 的 `web_search`、OpenAI 的 `file_search
 
 Polyglot 内置 Web 界面，编译进二进制——不需要单独的前端服务器、CDN 或运行时
 Node.js。自动检测浏览器语言（中文和英文），也可在侧边栏切换。
+访问 `/docs` 可免登录阅读内嵌文档；页面直接展示仓库里的文档，线上与源码保持一致。
+接口路径、鉴权方式和可直接使用的请求示例见 `/docs/api` 的 [API 调用文档](docs/api.zh-CN.md)。
 
 ### 概览
 
@@ -705,7 +716,8 @@ polyglot help             # 所有环境变量及默认值
 
 | | |
 |---|---|
-| **音频输入** | 图片和 PDF 今天就能转；音频还不行 |
+| **HTTP/SSE 音频输入** | Live 会话支持音频；普通 HTTP/SSE codec 仍不支持 |
+| **跨协议实时语音** | Gemini Live SDK 到 Gemini Live 可用；其它实时协议尚未接入 |
 | **Embeddings** | 还没有 `/v1/embeddings` 端点 |
 | **Token 计数** | 还没有 `count_tokens` 端点 |
 
@@ -722,8 +734,10 @@ provider schema 和真实抓包。在这一点改变之前，请把它当作五�
 Polyglot 是一个协议转换网关，刻意**不做** API 转售平台。
 
 **不包含，不打算做：** 计费、充值、兑换码、推广返利、用户套餐、RBAC、图片/视频/
-音频生成、RAG、agent、MCP。不引入 Redis、PostgreSQL、Kafka、独立 worker 或调度
-器。
+音乐生成、独立的音频生成、WebRTC、RAG、agent、MCP。不引入 Redis、PostgreSQL、
+Kafka、独立 worker 或调度器。
+
+Gemini Live 会话里的音频输入与输出属于协议消息转换，不是独立的音频生成产品。
 
 显示一条请求花了多少钱不是计费。没有余额、没有配额、没有扣款、没有账单。
 
@@ -731,8 +745,9 @@ Polyglot 是一个协议转换网关，刻意**不做** API 转售平台。
 除此之外什么都不回答。它不是组织架构、不是用户系统、不是 RBAC，也不会从它身上长出
 计费、套餐或 SSO。一个人运行的网关从头到尾不会学到"团队"这个词。
 
-服务端会话状态是设计上的边界。Polyglot 无状态，不保存任何历史轮次。Responses
-API 的 `store` 和 `previous_response_id` 报为不支持。会话归你的客户端管。
+持久化的服务端对话历史是设计上的边界。现有请求/响应 API 不保存历史轮次，Responses
+API 的 `store` 和 `previous_response_id` 报为不支持。Live 连接可以在连接期间
+携带临时会话状态，但不会变成对话存储；历史仍由客户端管理。
 
 ## 项目结构
 

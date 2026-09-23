@@ -1,4 +1,5 @@
 import * as React from "react";
+import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
 import { errorMessage } from "@/lib/hooks";
 import { useT } from "@/lib/i18n";
@@ -125,6 +126,11 @@ export function AuthPage({ mode, onDone }: { mode: "setup" | "login"; onDone: ()
             {t("auth.nextSteps")}
           </p>
         )}
+        <p className="mt-5 text-center text-sm">
+          <Link to="/docs" className="text-primary underline underline-offset-4 hover:text-accent-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring">
+            {t("auth.docsLink")}
+          </Link>
+        </p>
       </div>
     </div>
   );

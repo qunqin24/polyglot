@@ -393,8 +393,19 @@ not, so that pairing is reported unless `FETCH_REMOTE_MEDIA=true`, in which
 case Polyglot downloads and inlines it — with SSRF protections (private IP
 refusal, size cap, type validation, redirect limits).
 
-Audio is planned and not yet implemented. An `audio/*` attachment is refused
-outright rather than forwarded as a document.
+The Google Gen AI Go SDK can connect through Polyglot over WebSocket for
+real-time audio, transcription, interruption and tool calls. Add `gemini-3.8-live`
+to a Gemini provider's registered models (or give it an alias), then point the
+Go SDK's Gemini API `BaseURL` at Polyglot and use `Live.Connect`.
+The WebSocket path is
+`/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent`.
+The SDK's `APIKey` is a **Polyglot** API key; Polyglot sends the configured
+provider key upstream. Live sessions are recorded as one request with reported
+usage and cost when available. Session-specific options stay within the Live
+protocol; other realtime client protocols are not supported yet.
+
+Audio attachments to the five HTTP/SSE protocols are still refused outright
+rather than forwarded as documents.
 
 ### Provider-executed tools
 
@@ -409,6 +420,10 @@ survives automatically.
 Polyglot ships a built-in web interface embedded in the binary — no separate
 frontend server, no CDN, no Node.js at runtime. It detects the browser's
 language (English and Simplified Chinese) and is switchable from the sidebar.
+Open `/docs` to read the bundled guides without signing in; the page renders
+these repository documents, so the online and source versions stay in sync.
+For endpoint paths, authentication, and copyable request examples, see the
+[API reference](docs/api.md) at `/docs/api`.
 
 ### Overview
 
@@ -760,11 +775,12 @@ polyglot help             # every env var with its default
 
 ## Planned, not declined
 
-Three things are on the list and genuinely not built yet:
+These capabilities are on the list and genuinely not built yet:
 
 | | |
 |---|---|
-| **Audio input** | Images and PDFs convert today; audio does not |
+| **Audio input in HTTP/SSE** | Live sessions accept audio; ordinary HTTP/SSE codecs do not |
+| **Cross-protocol real-time voice** | Gemini Live SDK to Gemini Live works; other realtime dialects are not supported yet |
 | **Embeddings** | No `/v1/embeddings` surface yet |
 | **Token counting** | No `count_tokens` endpoint yet |
 
@@ -783,8 +799,11 @@ Polyglot is a protocol conversion gateway. It is deliberately **not** an API
 resale platform.
 
 **Not included, not planned:** billing, top-ups, redemption codes, referrals,
-user plans, RBAC, image/video/audio generation, RAG, agents, MCP. No Redis, no
-PostgreSQL, no Kafka, no workers, no schedulers.
+user plans, RBAC, image/video/music generation, standalone audio generation,
+WebRTC, RAG, agents, MCP. No Redis, no PostgreSQL, no Kafka, no workers or schedulers.
+
+Gemini Live sessions translate audio input and output as protocol messages, not
+as a standalone audio-generation product.
 
 Showing what a request cost is not billing. There is no balance, no quota, no
 deduction and no invoice.
@@ -794,10 +813,11 @@ layer that answers which resources belong to whom, and nothing else. Not an org
 chart, not a user system, not RBAC, and no billing, plans or SSO grow out of it.
 A gateway with one operator never learns the word.
 
-Server-side conversation state is out of scope by design. Polyglot is stateless
-and keeps no copy of earlier turns. The Responses API's `store` and
-`previous_response_id` are reported as unsupported. Your client owns the
-conversation.
+Persistent server-side conversation history is out of scope by design. The
+current request/response APIs keep no copy of earlier turns; the Responses
+API's `store` and `previous_response_id` are reported as unsupported. A
+Live connection may carry transient session state while it is open, but does
+not turn Polyglot into a conversation store. Your client owns the history.
 
 ## Project layout
 

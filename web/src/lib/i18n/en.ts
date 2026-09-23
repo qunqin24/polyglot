@@ -92,6 +92,16 @@ export const en = {
   "nav.keys": "API Keys",
   "nav.logs": "Logs",
   "nav.settings": "Settings",
+  "nav.docs": "Docs",
+  "docs.title": "Documentation",
+  "docs.overview": "Overview & setup",
+  "docs.api": "Call the API",
+  "docs.logApi": "Content log API",
+  "docs.development": "Development guide",
+  "docs.performance": "WebUI performance",
+  "docs.contents": "On this page",
+  "docs.dashboard": "Open dashboard",
+  "docs.otherLanguage": "This document is available in one language.",
 
   // --- auth -----------------------------------------------------------------
   "auth.setupTitle": "Welcome to Polyglot",
@@ -107,6 +117,7 @@ export const en = {
   "auth.passwordMismatch": "The two passwords do not match.",
   "auth.createAdmin": "Create administrator",
   "auth.signIn": "Sign in",
+  "auth.docsLink": "Read documentation",
   "auth.nextSteps": "Next: add a provider, then create an API key.",
   "auth.timezoneDetected": "Times will be shown in {timezone}, detected from your browser. You can change this in Settings.",
 

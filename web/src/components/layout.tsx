@@ -15,6 +15,7 @@ import {
   Menu,
   X,
   Languages,
+  BookOpenText,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useTheme, type Theme } from "@/lib/hooks";
@@ -33,6 +34,7 @@ const NAV: { to: string; label: TranslationKey; icon: typeof Activity; end?: boo
   { to: "/keys", label: "nav.keys", icon: KeyRound },
   { to: "/logs", label: "nav.logs", icon: ScrollText },
   { to: "/settings", label: "nav.settings", icon: SettingsIcon },
+  { to: "/docs", label: "nav.docs", icon: BookOpenText },
 ];
 
 export function Layout({ children }: { children: React.ReactNode }) {
