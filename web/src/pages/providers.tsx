@@ -514,18 +514,6 @@ function ProviderDialog({
   const verdict = test !== null && testedConnection === connection ? test : null;
   const agentPlatform = form.protocol === "gemini" && isAgentPlatformBaseURL(form.base_url);
 
-  // A saved provider was already reachable once and its models are listed on
-  // screen, so only a provider that does not exist yet has to prove itself
-  // before the picker will open.
-  const canList = provider !== null || verdict?.ok === true;
-  const modelsHint = agentPlatform
-    ? t("providers.agentPlatformModelsHint")
-    : canList
-      ? verdict?.ok
-        ? t("providers.listFromTest", { count: verdict.model_count ?? 0 })
-        : undefined
-      : t("providers.listNeedsTest");
-
   // An empty key field on edit means "keep the stored credential".
   function keyValue(): string | null {
     if (!provider) return form.api_key;
@@ -815,9 +803,8 @@ function ProviderDialog({
             apiKey={keyValue()}
             headers={parsed.ok ? parsed.headers : {}}
             timeoutSecs={form.timeout_secs}
-            canList={canList}
             showFetch={!agentPlatform}
-            hint={modelsHint}
+            hint={agentPlatform ? t("providers.agentPlatformModelsHint") : undefined}
           />
         </Step>
 

@@ -30,7 +30,6 @@ export function ProviderModels({
   apiKey,
   headers,
   timeoutSecs,
-  canList = true,
   showFetch = true,
   hint,
 }: {
@@ -44,14 +43,9 @@ export function ProviderModels({
   apiKey: string | null;
   headers: Record<string, string>;
   timeoutSecs: number;
-  /** Listing is the same upstream call the connection test makes, so a
-      credential that has not been proven yet has nothing to list from. The
-      caller decides; typing an id by hand is never blocked. */
-  canList?: boolean;
   /** Whether the upstream exposes a usable model-list endpoint. */
   showFetch?: boolean;
-  /** Replaces the standard explanation — with why listing is unavailable, or
-      with what the test already found. */
+  /** Replaces the standard explanation when listing is unavailable. */
   hint?: string;
 }) {
   const t = useT();
@@ -203,7 +197,7 @@ export function ProviderModels({
             variant="outline"
             size="sm"
             onClick={() => void openPicker()}
-            disabled={listing || busy || !baseURL || !canList}
+            disabled={listing || busy || !baseURL}
           >
             {listing ? <Spinner /> : <ListPlus />}
             {t("providers.fetchModels")}
