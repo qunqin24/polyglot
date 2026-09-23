@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 // mockUpstream stands in for OpenAI, Anthropic and Google. It recognises which
@@ -17,11 +19,12 @@ import (
 // piles of hand-written fixtures, and it keeps every test honest about the fact
 // that only the wire format differs.
 type mockUpstream struct {
-	mu       sync.Mutex
-	scn      scenario
-	lastPath string
-	lastBody []byte
-	lastAuth http.Header
+	mu         sync.Mutex
+	scn        scenario
+	lastPath   string
+	lastBody   []byte
+	lastAuth   http.Header
+	liveFrames []json.RawMessage
 }
 
 type scenario struct {
@@ -76,6 +79,10 @@ func (m *mockUpstream) lastRequest() (string, []byte) {
 }
 
 func (m *mockUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if strings.HasSuffix(r.URL.Path, ".GenerativeService.BidiGenerateContent") {
+		m.serveLive(w, r)
+		return
+	}
 	body, _ := io.ReadAll(r.Body)
 
 	m.mu.Lock()
@@ -108,6 +115,56 @@ func (m *mockUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	m.complete(w, proto, s)
+}
+
+func (m *mockUpstream) serveLive(w http.ResponseWriter, r *http.Request) {
+	conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+	_ = conn.SetReadDeadline(time.Now().Add(8 * time.Second))
+	m.mu.Lock()
+	m.lastPath, m.lastAuth, m.liveFrames = r.URL.Path, r.Header.Clone(), nil
+	m.mu.Unlock()
+	read := func() (map[string]json.RawMessage, error) {
+		var frame map[string]json.RawMessage
+		if err := conn.ReadJSON(&frame); err != nil {
+			return nil, err
+		}
+		b, _ := json.Marshal(frame)
+		m.mu.Lock()
+		m.liveFrames = append(m.liveFrames, b)
+		m.mu.Unlock()
+		return frame, nil
+	}
+	if _, err := read(); err != nil {
+		return
+	} // setup
+	if err := conn.WriteJSON(map[string]any{"setupComplete": map[string]any{}}); err != nil {
+		return
+	}
+	if _, err := read(); err != nil {
+		return
+	} // realtime audio
+	if _, err := read(); err != nil {
+		return
+	} // client content
+	if err := conn.WriteJSON(map[string]any{"toolCall": map[string]any{"functionCalls": []any{
+		map[string]any{"id": "call-1", "name": "lookup", "args": map[string]any{"city": "Paris"}},
+	}}}); err != nil {
+		return
+	}
+	if _, err := read(); err != nil {
+		return
+	} // tool response
+	_ = conn.WriteJSON(map[string]any{"serverContent": map[string]any{
+		"modelTurn": map[string]any{"role": "model", "parts": []any{
+			map[string]any{"inlineData": map[string]any{"mimeType": "audio/pcm;rate=24000", "data": "AAECAw=="}},
+		}}, "outputTranscription": map[string]any{"text": "Paris is sunny."}, "turnComplete": true,
+	}, "usageMetadata": map[string]any{"promptTokenCount": 11, "responseTokenCount": 5}})
+	// Keep the socket open until the SDK closes it, to exercise cancellation.
+	_, _, _ = conn.ReadMessage()
 }
 
 func (m *mockUpstream) serveModels(w http.ResponseWriter, r *http.Request) {

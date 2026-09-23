@@ -25,9 +25,9 @@ import (
 // Scope names an object to collect unknown members from, and the struct whose
 // json tags say which members are known.
 //
-// A Path of "" is the body itself. One level of nesting is supported because
-// that is what these protocols use: Gemini keeps its parameters under
-// generationConfig, so top-level-only capture would miss nearly all of them.
+// A Path of "" is the body itself. Paths may traverse nested objects and
+// indexed array entries, as needed for Live session configuration and tool
+// calls as well as Gemini's generationConfig.
 type Scope struct {
 	Path  string
 	Known any
@@ -120,13 +120,17 @@ func Merge(proto Name, ext *canonical.Extensions, encoded []byte, d *canonical.D
 	sort.Strings(paths)
 
 	var skipped []string
+	var missing []string
 	for _, path := range paths {
 		obj, ok := resolveScope(root, path)
 		if !ok {
 			// The encoder did not produce this object at all. A top-level or
 			// single-member scope is created; an array element is not, because
 			// there is no element to attach it to.
-			if strings.Contains(path, ".") {
+			if _, err := strconv.Atoi(path[strings.LastIndex(path, ".")+1:]); err == nil {
+				for _, it := range byPath[path] {
+					missing = append(missing, path+"."+it.Name)
+				}
 				continue
 			}
 			obj = map[string]json.RawMessage{}
@@ -139,6 +143,9 @@ func Merge(proto Name, ext *canonical.Extensions, encoded []byte, d *canonical.D
 			obj[it.Name] = it.Value
 		}
 		if path != "" && !writeScope(root, path, obj) {
+			for _, it := range byPath[path] {
+				missing = append(missing, path+"."+it.Name)
+			}
 			continue
 		}
 	}
@@ -148,7 +155,7 @@ func Merge(proto Name, ext *canonical.Extensions, encoded []byte, d *canonical.D
 		return encoded
 	}
 
-	restored := ext.Len() - len(skipped)
+	restored := ext.Len() - len(skipped) - len(missing)
 	if restored > 0 {
 		d.Note("extensions", canonical.FidelityExact,
 			"%d unrecognised %s field(s) were forwarded unchanged: %s",
@@ -159,6 +166,11 @@ func Merge(proto Name, ext *canonical.Extensions, encoded []byte, d *canonical.D
 		d.Note("extensions", canonical.FidelityLossy,
 			"%d field(s) were not forwarded because the conversion set them itself: %s",
 			len(skipped), strings.Join(skipped, ", "))
+	}
+	if len(missing) > 0 {
+		d.Note("extensions", canonical.FidelityUnsupported,
+			"%d field(s) could not be attached to the encoded object: %s",
+			len(missing), strings.Join(missing, ", "))
 	}
 	if ext.Truncated {
 		d.Note("extensions", canonical.FidelityLossy,
@@ -312,30 +324,45 @@ func writeScope(root map[string]json.RawMessage, path string, obj map[string]jso
 	if err != nil {
 		return false
 	}
-	segs := strings.Split(path, ".")
+	return writeScopeAt(root, strings.Split(path, "."), raw)
+}
+
+func writeScopeAt(root map[string]json.RawMessage, segs []string, raw json.RawMessage) bool {
 	if len(segs) == 1 {
-		root[path] = raw
+		root[segs[0]] = raw
 		return true
 	}
-	// Only "member.index" is produced by the codecs, which keeps this to the
-	// one shape that exists rather than a general JSON-pointer writer.
-	if len(segs) != 2 {
-		return false
+	current := root[segs[0]]
+	var child json.RawMessage
+	if idx, err := strconv.Atoi(segs[1]); err == nil {
+		var items []json.RawMessage
+		if json.Unmarshal(current, &items) != nil || idx < 0 || idx >= len(items) {
+			return false
+		}
+		if len(segs) == 2 {
+			items[idx] = raw
+		} else {
+			var obj map[string]json.RawMessage
+			if json.Unmarshal(items[idx], &obj) != nil || obj == nil || !writeScopeAt(obj, segs[2:], raw) {
+				return false
+			}
+			items[idx], _ = json.Marshal(obj)
+		}
+		child, _ = json.Marshal(items)
+	} else {
+		var obj map[string]json.RawMessage
+		if len(current) > 0 && json.Unmarshal(current, &obj) != nil {
+			return false
+		}
+		if obj == nil {
+			obj = map[string]json.RawMessage{}
+		}
+		if !writeScopeAt(obj, segs[1:], raw) {
+			return false
+		}
+		child, _ = json.Marshal(obj)
 	}
-	idx, err := strconv.Atoi(segs[1])
-	if err != nil {
-		return false
-	}
-	var items []json.RawMessage
-	if json.Unmarshal(root[segs[0]], &items) != nil || idx >= len(items) {
-		return false
-	}
-	items[idx] = raw
-	arr, err := json.Marshal(items)
-	if err != nil {
-		return false
-	}
-	root[segs[0]] = arr
+	root[segs[0]] = child
 	return true
 }
 

@@ -33,7 +33,9 @@ const (
 	// for an image and for a document, and picking the wrong one is a 400.
 	PartImage PartType = "image"
 	PartFile  PartType = "file"
-	// Audio is not converted yet and is still reported as unsupported.
+	// PartAudio is used by bidirectional Live sessions. The stateless codecs
+	// still report audio as unsupported until they implement audio conversion.
+	PartAudio PartType = "audio"
 )
 
 // ContentPart is one block inside a message. Exactly one of the payload

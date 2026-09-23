@@ -153,6 +153,7 @@ func (s *Server) Handler() http.Handler {
 	// Gemini. The model and the streaming choice live in the path.
 	r.Group(func(r chi.Router) {
 		r.Use(auth.Gateway(s.store, protocol.Gemini))
+		r.Get("/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent", s.gw.Live)
 		r.Post("/v1beta/models/{action}", s.handleGeminiGenerate)
 		r.Post("/v1/models/{action}", s.handleGeminiGenerate)
 		r.Get("/v1beta/models", s.handleGeminiListModels)
