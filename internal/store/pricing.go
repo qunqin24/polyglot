@@ -150,6 +150,13 @@ func (s *Store) CatalogPrices(ctx context.Context) (map[string]pricing.Rates, er
 
 // ModelPriceOverrides reads every price an operator typed, keyed by provider
 // and model. A model with nothing set is absent rather than present and blank.
+//
+// It reads models with no team predicate on purpose, and that is not a missed
+// one. The pricing resolver holds a single snapshot and prices every team's
+// rows from the same usage-flush goroutine, so a scoped version of this would
+// quietly stop pricing every team but one. It is correct without the predicate
+// because pricing.ModelKey is keyed on provider_id, which is globally unique
+// and therefore already names exactly one team's model row.
 func (s *Store) ModelPriceOverrides(ctx context.Context) (map[pricing.ModelKey]pricing.Price, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT provider_id, upstream_model_id, price_input, price_output,
@@ -179,19 +186,24 @@ func (s *Store) ModelPriceOverrides(ctx context.Context) (map[pricing.ModelKey]p
 // SetModelPrice stores an operator's override. A nil field clears that price
 // and puts the model back on the catalog, which is why this takes four
 // nullable numbers rather than a copy of whatever the form displayed.
-func (s *Store) SetModelPrice(ctx context.Context, id int64, p pricing.Price) (*Model, error) {
-	res, err := s.db.ExecContext(ctx,
+//
+// models has no team_id of its own and this is a write, so the predicate is a
+// subquery through the provider rather than a join: an override typed onto
+// another team's model row is the leak this guard exists to close.
+func (t *Scope) SetModelPrice(ctx context.Context, id int64, p pricing.Price) (*Model, error) {
+	res, err := t.s.db.ExecContext(ctx,
 		`UPDATE models SET price_input = ?, price_output = ?, price_cache_read = ?,
-		     price_cache_write = ?, updated_at = ? WHERE id = ?`,
+		     price_cache_write = ?, updated_at = ?
+		 WHERE id = ? AND provider_id IN (SELECT id FROM providers WHERE team_id = ?)`,
 		nullFloat64(p.Input), nullFloat64(p.Output), nullFloat64(p.CacheRead),
-		nullFloat64(p.CacheWrite), time.Now().Unix(), id)
+		nullFloat64(p.CacheWrite), time.Now().Unix(), id, t.teamID)
 	if err != nil {
 		return nil, fmt.Errorf("set price for model %d: %w", id, err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return nil, ErrNotFound
 	}
-	return s.GetModel(ctx, id)
+	return t.GetModel(ctx, id)
 }
 
 func price(in, out, cr, cw sql.NullFloat64) pricing.Price {

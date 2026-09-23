@@ -23,13 +23,16 @@ import (
 // slashes, so splitting on the first slash would be unreliable.
 const NamespaceSeparator = "::"
 
+// Router holds no store of its own. Every lookup it makes is over team-owned
+// data, so the team comes in with the call as an explicit *store.Scope rather
+// than being fixed when the router is built: one router serves every team, and
+// a resolution can never be made without naming whose registry it read.
 type Router struct {
-	st             *store.Store
 	defaultTimeout time.Duration
 }
 
-func New(st *store.Store, defaultTimeout time.Duration) *Router {
-	return &Router{st: st, defaultTimeout: defaultTimeout}
+func New(defaultTimeout time.Duration) *Router {
+	return &Router{defaultTimeout: defaultTimeout}
 }
 
 // Resolution is one candidate upstream for a request.
@@ -68,22 +71,27 @@ const (
 //
 // Aliases are checked before real ids so an operator can shadow a confusing
 // upstream name, which is the whole point of having them.
-func (r *Router) Resolve(ctx context.Context, model string) ([]Resolution, error) {
+//
+// tm is the team whose registry is searched, and it is an explicit parameter
+// rather than something read out of ctx: a scope carried in a context is
+// exactly the kind of thing a caller can forget to put there, and forgetting it
+// here means resolving one team's request against another team's providers.
+func (r *Router) Resolve(ctx context.Context, tm *store.Scope, model string) ([]Resolution, error) {
 	if strings.TrimSpace(model) == "" {
 		return nil, canonical.Errorf(canonical.ErrInvalidRequest, "field 'model' is required")
 	}
 
 	if providerName, modelID, ok := strings.Cut(model, NamespaceSeparator); ok {
-		return r.resolveNamespaced(ctx, strings.TrimSpace(providerName), strings.TrimSpace(modelID))
+		return r.resolveNamespaced(ctx, tm, strings.TrimSpace(providerName), strings.TrimSpace(modelID))
 	}
 
-	if res, err := r.resolveAlias(ctx, model); err != nil {
+	if res, err := r.resolveAlias(ctx, tm, model); err != nil {
 		return nil, err
 	} else if len(res) > 0 {
 		return res, nil
 	}
 
-	if res, err := r.resolveModel(ctx, model); err != nil {
+	if res, err := r.resolveModel(ctx, tm, model); err != nil {
 		return nil, err
 	} else if len(res) > 0 {
 		return res, nil
@@ -96,13 +104,13 @@ func (r *Router) Resolve(ctx context.Context, model string) ([]Resolution, error
 
 // resolveNamespaced handles the explicit provider::model form, which is how an
 // operator picks a specific provider when several offer the same model id.
-func (r *Router) resolveNamespaced(ctx context.Context, providerName, modelID string) ([]Resolution, error) {
+func (r *Router) resolveNamespaced(ctx context.Context, tm *store.Scope, providerName, modelID string) ([]Resolution, error) {
 	if providerName == "" || modelID == "" {
 		return nil, canonical.Errorf(canonical.ErrInvalidRequest,
 			"expected a model of the form provider%smodel", NamespaceSeparator)
 	}
 
-	p, err := r.st.ProviderByName(ctx, providerName)
+	p, err := tm.ProviderByName(ctx, providerName)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, canonical.Errorf(canonical.ErrNotFound, "no provider named %q", providerName)
 	}
@@ -118,7 +126,7 @@ func (r *Router) resolveNamespaced(ctx context.Context, providerName, modelID st
 		return nil, err
 	}
 
-	m, err := r.st.ModelForProvider(ctx, p.ID, modelID)
+	m, err := tm.ModelForProvider(ctx, p.ID, modelID)
 	switch {
 	case err == nil:
 		return []Resolution{{
@@ -132,14 +140,14 @@ func (r *Router) resolveNamespaced(ctx context.Context, providerName, modelID st
 	}
 }
 
-func (r *Router) resolveAlias(ctx context.Context, alias string) ([]Resolution, error) {
-	rows, err := r.st.AliasesFor(ctx, alias)
+func (r *Router) resolveAlias(ctx context.Context, tm *store.Scope, alias string) ([]Resolution, error) {
+	rows, err := tm.AliasesFor(ctx, alias)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]Resolution, 0, len(rows))
 	for _, a := range rows {
-		target, _, err := r.targetForID(ctx, a.ProviderID)
+		target, _, err := r.targetForID(ctx, tm, a.ProviderID)
 		if err != nil {
 			return nil, err
 		}
@@ -168,14 +176,14 @@ func (r *Router) resolveAlias(ctx context.Context, alias string) ([]Resolution, 
 // Within one priority level the caller may reorder by protocol; see
 // PreferProtocol. That replaces a tiebreak which was otherwise just creation
 // order, and never crosses a priority boundary.
-func (r *Router) resolveModel(ctx context.Context, modelID string) ([]Resolution, error) {
-	models, err := r.st.ModelsByUpstreamID(ctx, modelID)
+func (r *Router) resolveModel(ctx context.Context, tm *store.Scope, modelID string) ([]Resolution, error) {
+	models, err := tm.ModelsByUpstreamID(ctx, modelID)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]Resolution, 0, len(models))
 	for _, m := range models {
-		target, p, err := r.targetForID(ctx, m.ProviderID)
+		target, p, err := r.targetForID(ctx, tm, m.ProviderID)
 		if err != nil {
 			return nil, err
 		}
@@ -187,8 +195,8 @@ func (r *Router) resolveModel(ctx context.Context, modelID string) ([]Resolution
 	return out, nil
 }
 
-func (r *Router) targetForID(ctx context.Context, providerID int64) (*provider.Target, *store.Provider, error) {
-	p, err := r.st.GetProvider(ctx, providerID)
+func (r *Router) targetForID(ctx context.Context, tm *store.Scope, providerID int64) (*provider.Target, *store.Provider, error) {
+	p, err := tm.GetProvider(ctx, providerID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -240,11 +248,11 @@ type ModelEntry struct {
 // ListModels enumerates everything a client may ask for: every alias, plus
 // every enabled model in the registry. An ambiguous id also gets its qualified
 // provider::model form, so a client can always address one specific provider.
-func (r *Router) ListModels(ctx context.Context) ([]ModelEntry, error) {
+func (r *Router) ListModels(ctx context.Context, tm *store.Scope) ([]ModelEntry, error) {
 	seen := map[string]bool{}
 	var out []ModelEntry
 
-	aliases, err := r.st.ListAliases(ctx)
+	aliases, err := tm.ListAliases(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list models: %w", err)
 	}
@@ -259,11 +267,11 @@ func (r *Router) ListModels(ctx context.Context) ([]ModelEntry, error) {
 		})
 	}
 
-	models, err := r.st.ListModels(ctx, store.ModelFilter{EnabledOnly: true, Limit: 2000})
+	models, err := tm.ListModels(ctx, store.ModelFilter{EnabledOnly: true, Limit: 2000})
 	if err != nil {
 		return nil, fmt.Errorf("list models: %w", err)
 	}
-	ambiguous, err := r.st.AmbiguousModelIDs(ctx)
+	ambiguous, err := tm.AmbiguousModelIDs(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list models: %w", err)
 	}

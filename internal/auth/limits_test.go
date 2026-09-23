@@ -23,7 +23,7 @@ func limitStore(t *testing.T) *store.Store {
 func restrictedKey(t *testing.T, st *store.Store, p store.APIKeyPolicy) *store.APIKey {
 	t.Helper()
 	secret, prefix := NewAPIKey()
-	k, err := st.CreateAPIKeyWithPolicy(context.Background(), "limited", prefix, secret, p)
+	k, err := st.ForTeam(store.DefaultTeamID).CreateAPIKeyWithPolicy(context.Background(), "limited", prefix, secret, p)
 	if err != nil {
 		t.Fatalf("create key: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestAPIKeyPolicyRoundTripsThroughSQLite(t *testing.T) {
 		RPM: pint(12), TPD: pint(5000), MaxConcurrent: pint(3), MaxOutputTokens: pint(256),
 		ExpiresAt: &expires, AllowedModels: []string{"z-model", "coding", "coding"},
 	})
-	got, err := st.GetAPIKey(context.Background(), created.ID)
+	got, err := st.ForTeam(store.DefaultTeamID).GetAPIKey(context.Background(), created.ID)
 	if err != nil {
 		t.Fatalf("read key: %v", err)
 	}

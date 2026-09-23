@@ -28,13 +28,14 @@ func snapshot(version string, entries ...pricing.Entry) *pricing.Snapshot {
 func registerModel(t *testing.T, st *Store, providerName, modelID string) *Model {
 	t.Helper()
 	ctx := context.Background()
-	p, err := st.CreateProvider(ctx, &Provider{
+	tm := st.ForTeam(DefaultTeamID)
+	p, err := tm.CreateProvider(ctx, &Provider{
 		Name: providerName, Protocol: "openai", BaseURL: "https://api.example.com", Enabled: true,
 	})
 	if err != nil {
 		t.Fatalf("create provider: %v", err)
 	}
-	m, err := st.CreateModel(ctx, &Model{ProviderID: p.ID, UpstreamModelID: modelID, Enabled: true})
+	m, err := tm.CreateModel(ctx, &Model{ProviderID: p.ID, UpstreamModelID: modelID, Enabled: true})
 	if err != nil {
 		t.Fatalf("create model: %v", err)
 	}
@@ -47,6 +48,7 @@ func registerModel(t *testing.T, st *Store, providerName, modelID string) *Model
 // they are paying less than list.
 func TestRefreshingTheCatalogDoesNotOverwriteAnOperatorsPrice(t *testing.T) {
 	st := priceStore(t)
+	tm := st.ForTeam(DefaultTeamID)
 	ctx := context.Background()
 	m := registerModel(t, st, "reseller", "claude-sonnet-4-5")
 
@@ -56,7 +58,7 @@ func TestRefreshingTheCatalogDoesNotOverwriteAnOperatorsPrice(t *testing.T) {
 	}), "embedded"); err != nil {
 		t.Fatalf("load catalog: %v", err)
 	}
-	if _, err := st.SetModelPrice(ctx, m.ID, pricing.Price{Input: usd(1), Output: usd(5)}); err != nil {
+	if _, err := tm.SetModelPrice(ctx, m.ID, pricing.Price{Input: usd(1), Output: usd(5)}); err != nil {
 		t.Fatalf("set price: %v", err)
 	}
 
@@ -86,6 +88,7 @@ func TestRefreshingTheCatalogDoesNotOverwriteAnOperatorsPrice(t *testing.T) {
 // the whole reason a blank field is stored as null rather than as a copy.
 func TestClearingAnOverrideFollowsTheCatalogAgain(t *testing.T) {
 	st := priceStore(t)
+	tm := st.ForTeam(DefaultTeamID)
 	ctx := context.Background()
 	m := registerModel(t, st, "official", "gpt-5.5")
 
@@ -94,10 +97,10 @@ func TestClearingAnOverrideFollowsTheCatalogAgain(t *testing.T) {
 	}), "embedded"); err != nil {
 		t.Fatalf("load catalog: %v", err)
 	}
-	if _, err := st.SetModelPrice(ctx, m.ID, pricing.Price{Input: usd(99)}); err != nil {
+	if _, err := tm.SetModelPrice(ctx, m.ID, pricing.Price{Input: usd(99)}); err != nil {
 		t.Fatalf("set price: %v", err)
 	}
-	if _, err := st.SetModelPrice(ctx, m.ID, pricing.Price{}); err != nil {
+	if _, err := tm.SetModelPrice(ctx, m.ID, pricing.Price{}); err != nil {
 		t.Fatalf("clear price: %v", err)
 	}
 
@@ -124,6 +127,7 @@ func TestClearingAnOverrideFollowsTheCatalogAgain(t *testing.T) {
 // start charging for something the operator said was free.
 func TestAPriceOfZeroIsKeptAsAPriceNotAsBlank(t *testing.T) {
 	st := priceStore(t)
+	tm := st.ForTeam(DefaultTeamID)
 	ctx := context.Background()
 	m := registerModel(t, st, "local", "qwen3-32b")
 
@@ -132,7 +136,7 @@ func TestAPriceOfZeroIsKeptAsAPriceNotAsBlank(t *testing.T) {
 	}), "embedded"); err != nil {
 		t.Fatalf("load catalog: %v", err)
 	}
-	if _, err := st.SetModelPrice(ctx, m.ID, pricing.Price{Input: usd(0), Output: usd(0)}); err != nil {
+	if _, err := tm.SetModelPrice(ctx, m.ID, pricing.Price{Input: usd(0), Output: usd(0)}); err != nil {
 		t.Fatalf("set price: %v", err)
 	}
 
@@ -228,15 +232,17 @@ func TestALongContextTierRoundTripsThroughTheDatabase(t *testing.T) {
 // price must not silently rewrite history, and a zero would say they were free.
 func TestOldRequestLogsKeepAnUnknownCost(t *testing.T) {
 	st := priceStore(t)
+	tm := st.ForTeam(DefaultTeamID)
 	ctx := context.Background()
 
 	if err := st.InsertRequestLogs(ctx, []*RequestLog{{
+		TeamID:    DefaultTeamID,
 		RequestID: "before-pricing", Status: "success", StatusCode: 200,
 		InputTokens: 100, OutputTokens: 50,
 	}}); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
-	logs, err := st.ListRequestLogs(ctx, LogFilter{Limit: 1})
+	logs, err := tm.ListRequestLogs(ctx, LogFilter{Limit: 1})
 	if err != nil || len(logs) == 0 {
 		t.Fatalf("read back: %v", err)
 	}
@@ -244,7 +250,7 @@ func TestOldRequestLogsKeepAnUnknownCost(t *testing.T) {
 		t.Errorf("cost = %v on a row nobody priced, want null", *logs[0].CostUSD)
 	}
 
-	stats, err := st.Stats(ctx, logs[0].StartedAt.Add(-time.Hour))
+	stats, err := tm.Stats(ctx, logs[0].StartedAt.Add(-time.Hour))
 	if err != nil {
 		t.Fatalf("stats: %v", err)
 	}

@@ -366,11 +366,11 @@ func TestGeminiNamespacedModelInPath(t *testing.T) {
 	}, "gemini")
 
 	// `provider::model` names a real registered model, so give it one.
-	providers, err := h.store.ListProviders(context.Background())
+	providers, err := h.team().ListProviders(context.Background())
 	if err != nil || len(providers) == 0 {
 		t.Fatalf("list providers: %v", err)
 	}
-	if _, err := h.store.CreateModel(context.Background(), &store.Model{
+	if _, err := h.team().CreateModel(context.Background(), &store.Model{
 		ProviderID:      providers[0].ID,
 		UpstreamModelID: "upstream-model-x",
 		Enabled:         true,

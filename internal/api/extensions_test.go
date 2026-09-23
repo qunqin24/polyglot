@@ -55,12 +55,13 @@ func TestStrictFieldsStopsForwardingPerProvider(t *testing.T) {
 	var sent string
 	h := newHarness(t, captureUpstream(&sent, okChatResponse), "openai",
 		withSetup(func(t *testing.T, st *store.Store, providerID int64) {
-			p, err := st.GetProvider(context.Background(), providerID)
+			tm := st.ForTeam(store.DefaultTeamID)
+			p, err := tm.GetProvider(context.Background(), providerID)
 			if err != nil {
 				t.Fatalf("get provider: %v", err)
 			}
 			p.StrictFields = true
-			if _, err := st.UpdateProvider(context.Background(), providerID, p, nil); err != nil {
+			if _, err := tm.UpdateProvider(context.Background(), providerID, p, nil); err != nil {
 				t.Fatalf("update provider: %v", err)
 			}
 		}))
@@ -88,7 +89,7 @@ func TestForwardingIsTheDefaultForANewProvider(t *testing.T) {
 		io.WriteString(w, okChatResponse)
 	}, "openai")
 
-	p, err := h.store.ProviderByName(context.Background(), "fake")
+	p, err := h.team().ProviderByName(context.Background(), "fake")
 	if err != nil {
 		t.Fatalf("get provider: %v", err)
 	}

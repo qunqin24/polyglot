@@ -15,6 +15,7 @@ func money(v float64) *float64 { return &v }
 func spend(t *testing.T, st *store.Store, keyID int64, at time.Time, usd *float64) {
 	t.Helper()
 	rec := &store.RequestLog{
+		TeamID:           store.DefaultTeamID,
 		RequestID:        "test",
 		StartedAt:        at,
 		FinishedAt:       at,
@@ -113,7 +114,7 @@ func TestUnpricedRequestsAreNotFree(t *testing.T) {
 	spend(t, st, key.ID, now, nil)
 	spend(t, st, key.ID, now, money(0.5))
 
-	spent, unpriced, err := st.APIKeySpendSince(context.Background(), key.ID, key.BudgetWindowStart(now))
+	spent, unpriced, err := st.ForTeam(store.DefaultTeamID).APIKeySpendSince(context.Background(), key.ID, key.BudgetWindowStart(now))
 	if err != nil {
 		t.Fatalf("sum spend: %v", err)
 	}

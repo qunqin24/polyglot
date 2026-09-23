@@ -32,7 +32,7 @@ func (s *Server) handleListPricing(w http.ResponseWriter, r *http.Request) {
 	}
 	f.Limit = 2000
 
-	models, err := s.store.ListModels(r.Context(), f)
+	models, err := s.team().ListModels(r.Context(), f)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "%v", err)
 		return
@@ -101,7 +101,7 @@ func (s *Server) handleSetModelPrice(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	m, err := s.store.SetModelPrice(r.Context(), id, in)
+	m, err := s.team().SetModelPrice(r.Context(), id, in)
 	if err != nil {
 		writeErr(w, storeErrStatus(err), "%v", err)
 		return

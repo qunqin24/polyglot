@@ -60,12 +60,15 @@ func (s *Server) handleListLogs(w http.ResponseWriter, r *http.Request) {
 		f.Limit = 50
 	}
 
-	logs, err := s.store.ListRequestLogs(r.Context(), f)
+	// This handler answers both the admin session and a log key, so the team
+	// comes from the request rather than from here. See logTeamID.
+	tm := s.logTeam(r)
+	logs, err := tm.ListRequestLogs(r.Context(), f)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
-	total, err := s.store.CountRequestLogs(r.Context(), f)
+	total, err := tm.CountRequestLogs(r.Context(), f)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "%v", err)
 		return
@@ -83,7 +86,7 @@ func (s *Server) handleGetLog(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid log id")
 		return
 	}
-	l, err := s.store.GetRequestLog(r.Context(), id)
+	l, err := s.logTeam(r).GetRequestLog(r.Context(), id)
 	if err != nil {
 		writeErr(w, storeErrStatus(err), "%v", err)
 		return
@@ -115,7 +118,7 @@ func (s *Server) handleKeyOrigins(w http.ResponseWriter, r *http.Request) {
 	if v, err := strconv.Atoi(r.URL.Query().Get("days")); err == nil && v > 0 && v <= 365 {
 		days = v
 	}
-	origins, err := s.store.APIKeyOrigins(r.Context(), id, time.Now().AddDate(0, 0, -days), 20)
+	origins, err := s.team().APIKeyOrigins(r.Context(), id, time.Now().AddDate(0, 0, -days), 20)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "%v", err)
 		return
@@ -133,7 +136,7 @@ func (s *Server) handleModelStats(w http.ResponseWriter, r *http.Request) {
 	if v, err := strconv.Atoi(r.URL.Query().Get("hours")); err == nil && v > 0 && v <= 24*30 {
 		hours = v
 	}
-	stats, err := s.store.ModelStats(r.Context(), time.Now().Add(-time.Duration(hours)*time.Hour))
+	stats, err := s.team().ModelStats(r.Context(), time.Now().Add(-time.Duration(hours)*time.Hour))
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "%v", err)
 		return

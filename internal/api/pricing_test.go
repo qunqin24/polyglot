@@ -22,7 +22,8 @@ const cachedChatResponse = `{"id":"x","choices":[{"index":0,"message":{"role":"a
 // registry, which is where an override lives.
 func registerPricedModel(t *testing.T, st *store.Store, providerID int64) {
 	t.Helper()
-	if _, err := st.CreateModel(context.Background(), &store.Model{
+	tm := st.ForTeam(store.DefaultTeamID)
+	if _, err := tm.CreateModel(context.Background(), &store.Model{
 		ProviderID: providerID, UpstreamModelID: "upstream-model-x", Enabled: true,
 	}); err != nil {
 		t.Fatalf("register model: %v", err)

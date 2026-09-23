@@ -51,7 +51,7 @@ func (h *harness) waitForLog(t *testing.T) *store.RequestLog {
 	t.Helper()
 	for range 60 {
 		time.Sleep(100 * time.Millisecond)
-		logs, err := h.store.ListRequestLogs(context.Background(), store.LogFilter{Limit: 1})
+		logs, err := h.team().ListRequestLogs(context.Background(), store.LogFilter{Limit: 1})
 		if err != nil {
 			t.Fatalf("list logs: %v", err)
 		}
@@ -207,10 +207,11 @@ func TestRetryToASecondProviderIsCounted(t *testing.T) {
 	h := newHarness(t, broken, "openai",
 		withTelemetry(telemetryOn()),
 		withSetup(func(t *testing.T, st *store.Store, firstProvider int64) {
+			tm := st.ForTeam(store.DefaultTeamID)
 			// A second provider offering the same model id, at a lower
 			// priority number so the broken one is tried first and the order
 			// is deterministic.
-			p2, err := st.CreateProvider(context.Background(), &store.Provider{
+			p2, err := tm.CreateProvider(context.Background(), &store.Provider{
 				Name: "backup", Protocol: "openai", BaseURL: backup.URL,
 				APIKey: "sk-backup-secret", Enabled: true, Priority: -10,
 			})
@@ -218,7 +219,7 @@ func TestRetryToASecondProviderIsCounted(t *testing.T) {
 				t.Fatalf("create backup provider: %v", err)
 			}
 			for _, providerID := range []int64{firstProvider, p2.ID} {
-				if _, err := st.CreateModel(context.Background(), &store.Model{
+				if _, err := tm.CreateModel(context.Background(), &store.Model{
 					ProviderID: providerID, UpstreamModelID: "shared-model", Enabled: true,
 				}); err != nil {
 					t.Fatalf("register model: %v", err)

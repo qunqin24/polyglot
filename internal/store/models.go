@@ -74,36 +74,39 @@ type ModelFilter struct {
 	Offset      int
 }
 
+// models carries no team_id of its own: it reaches its team through the
+// provider that offers it. Every read below goes through queryViaProvider,
+// whose join cannot be written as a LEFT JOIN, and every write carries its own
+// guard on providers.
+
 // ListModels returns registry entries joined with their provider.
-func (s *Store) ListModels(ctx context.Context, f ModelFilter) ([]*Model, error) {
-	var where []string
+func (t *Scope) ListModels(ctx context.Context, f ModelFilter) ([]*Model, error) {
+	// The filter terms are conditional; the team predicate is not, which is
+	// why it comes from the constructor rather than from this list.
+	var rest strings.Builder
 	var args []any
 	if f.ProviderID > 0 {
-		where = append(where, "m.provider_id = ?")
+		rest.WriteString("AND m.provider_id = ? ")
 		args = append(args, f.ProviderID)
 	}
 	if f.Search != "" {
-		where = append(where, "(m.upstream_model_id LIKE ? OR m.display_name LIKE ?)")
+		rest.WriteString("AND (m.upstream_model_id LIKE ? OR m.display_name LIKE ?) ")
 		args = append(args, "%"+f.Search+"%", "%"+f.Search+"%")
 	}
 	if f.EnabledOnly {
-		where = append(where, "m.enabled = 1 AND p.enabled = 1")
+		rest.WriteString("AND m.enabled = 1 AND p.enabled = 1 ")
 	}
 
-	q := `SELECT ` + modelCols + ` FROM models m JOIN providers p ON p.id = m.provider_id`
-	if len(where) > 0 {
-		q += " WHERE " + strings.Join(where, " AND ")
-	}
-	q += " ORDER BY p.priority DESC, p.name, m.upstream_model_id"
+	rest.WriteString("ORDER BY p.priority DESC, p.name, m.upstream_model_id")
 
 	limit := f.Limit
 	if limit <= 0 || limit > 2000 {
 		limit = 500
 	}
-	q += " LIMIT ? OFFSET ?"
+	rest.WriteString(" LIMIT ? OFFSET ?")
 	args = append(args, limit, f.Offset)
 
-	rows, err := s.db.QueryContext(ctx, q, args...)
+	rows, err := t.queryViaProvider(ctx, modelCols, "models", "m", rest.String(), args...)
 	if err != nil {
 		return nil, fmt.Errorf("list models: %w", err)
 	}
@@ -120,26 +123,22 @@ func (s *Store) ListModels(ctx context.Context, f ModelFilter) ([]*Model, error)
 }
 
 // CountModels reports how many rows match, ignoring paging.
-func (s *Store) CountModels(ctx context.Context, f ModelFilter) (int, error) {
-	var where []string
+func (t *Scope) CountModels(ctx context.Context, f ModelFilter) (int, error) {
+	var rest strings.Builder
 	var args []any
 	if f.ProviderID > 0 {
-		where = append(where, "m.provider_id = ?")
+		rest.WriteString("AND m.provider_id = ? ")
 		args = append(args, f.ProviderID)
 	}
 	if f.Search != "" {
-		where = append(where, "(m.upstream_model_id LIKE ? OR m.display_name LIKE ?)")
+		rest.WriteString("AND (m.upstream_model_id LIKE ? OR m.display_name LIKE ?) ")
 		args = append(args, "%"+f.Search+"%", "%"+f.Search+"%")
 	}
 	if f.EnabledOnly {
-		where = append(where, "m.enabled = 1 AND p.enabled = 1")
-	}
-	q := `SELECT COUNT(*) FROM models m JOIN providers p ON p.id = m.provider_id`
-	if len(where) > 0 {
-		q += " WHERE " + strings.Join(where, " AND ")
+		rest.WriteString("AND m.enabled = 1 AND p.enabled = 1 ")
 	}
 	var n int
-	if err := s.db.QueryRowContext(ctx, q, args...).Scan(&n); err != nil {
+	if err := t.queryRowViaProvider(ctx, "COUNT(*)", "models", "m", rest.String(), args...).Scan(&n); err != nil {
 		return 0, fmt.Errorf("count models: %w", err)
 	}
 	return n, nil
@@ -148,10 +147,9 @@ func (s *Store) CountModels(ctx context.Context, f ModelFilter) (int, error) {
 // ModelsByUpstreamID returns every enabled model with this exact upstream id,
 // ordered by provider priority then provider id. The order is total and
 // stable, so an ambiguous id always resolves to the same provider.
-func (s *Store) ModelsByUpstreamID(ctx context.Context, upstreamID string) ([]*Model, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+modelCols+` FROM models m JOIN providers p ON p.id = m.provider_id
-		 WHERE m.upstream_model_id = ? AND m.enabled = 1 AND p.enabled = 1
+func (t *Scope) ModelsByUpstreamID(ctx context.Context, upstreamID string) ([]*Model, error) {
+	rows, err := t.queryViaProvider(ctx, modelCols, "models", "m",
+		`AND m.upstream_model_id = ? AND m.enabled = 1 AND p.enabled = 1
 		 ORDER BY p.priority DESC, p.id`, upstreamID)
 	if err != nil {
 		return nil, fmt.Errorf("models by upstream id %q: %w", upstreamID, err)
@@ -170,10 +168,9 @@ func (s *Store) ModelsByUpstreamID(ctx context.Context, upstreamID string) ([]*M
 
 // ModelForProvider looks up one model on one provider, used by the explicit
 // "provider::model" form.
-func (s *Store) ModelForProvider(ctx context.Context, providerID int64, upstreamID string) (*Model, error) {
-	row := s.db.QueryRowContext(ctx,
-		`SELECT `+modelCols+` FROM models m JOIN providers p ON p.id = m.provider_id
-		 WHERE m.provider_id = ? AND m.upstream_model_id = ? AND m.enabled = 1`,
+func (t *Scope) ModelForProvider(ctx context.Context, providerID int64, upstreamID string) (*Model, error) {
+	row := t.queryRowViaProvider(ctx, modelCols, "models", "m",
+		`AND m.provider_id = ? AND m.upstream_model_id = ? AND m.enabled = 1`,
 		providerID, upstreamID)
 	m, err := scanModel(row)
 	if err == sql.ErrNoRows {
@@ -185,9 +182,8 @@ func (s *Store) ModelForProvider(ctx context.Context, providerID int64, upstream
 	return m, nil
 }
 
-func (s *Store) GetModel(ctx context.Context, id int64) (*Model, error) {
-	row := s.db.QueryRowContext(ctx,
-		`SELECT `+modelCols+` FROM models m JOIN providers p ON p.id = m.provider_id WHERE m.id = ?`, id)
+func (t *Scope) GetModel(ctx context.Context, id int64) (*Model, error) {
+	row := t.queryRowViaProvider(ctx, modelCols, "models", "m", `AND m.id = ?`, id)
 	m, err := scanModel(row)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotFound
@@ -199,36 +195,48 @@ func (s *Store) GetModel(ctx context.Context, id int64) (*Model, error) {
 }
 
 // CreateModel adds a manual entry.
-func (s *Store) CreateModel(ctx context.Context, m *Model) (*Model, error) {
+//
+// INSERT … SELECT … WHERE EXISTS proves the provider belongs to this team in
+// the same statement that writes the row; nothing is inserted otherwise, and
+// no rows affected reads as ErrNotFound rather than as a permission error.
+func (t *Scope) CreateModel(ctx context.Context, m *Model) (*Model, error) {
 	now := time.Now().Unix()
-	res, err := s.db.ExecContext(ctx,
+	res, err := t.s.db.ExecContext(ctx,
 		`INSERT INTO models (provider_id, upstream_model_id, display_name, enabled, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		m.ProviderID, m.UpstreamModelID, m.DisplayName, boolInt(m.Enabled), now, now)
+		 SELECT ?, ?, ?, ?, ?, ?
+		 WHERE EXISTS (SELECT 1 FROM providers WHERE id = ? AND team_id = ?)`,
+		m.ProviderID, m.UpstreamModelID, m.DisplayName, boolInt(m.Enabled), now, now,
+		m.ProviderID, t.teamID)
 	if err != nil {
 		return nil, fmt.Errorf("create model %q: %w", m.UpstreamModelID, err)
 	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, ErrNotFound
+	}
 	id, _ := res.LastInsertId()
-	return s.GetModel(ctx, id)
+	return t.GetModel(ctx, id)
 }
 
 // UpdateModel changes the operator-editable fields. The upstream id is not
 // editable: that would silently repoint an entry at a different model.
-func (s *Store) UpdateModel(ctx context.Context, id int64, displayName string, enabled bool) (*Model, error) {
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE models SET display_name = ?, enabled = ?, updated_at = ? WHERE id = ?`,
-		displayName, boolInt(enabled), time.Now().Unix(), id)
+func (t *Scope) UpdateModel(ctx context.Context, id int64, displayName string, enabled bool) (*Model, error) {
+	res, err := t.s.db.ExecContext(ctx,
+		`UPDATE models SET display_name = ?, enabled = ?, updated_at = ?
+		 WHERE id = ? AND provider_id IN (SELECT id FROM providers WHERE team_id = ?)`,
+		displayName, boolInt(enabled), time.Now().Unix(), id, t.teamID)
 	if err != nil {
 		return nil, fmt.Errorf("update model %d: %w", id, err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return nil, ErrNotFound
 	}
-	return s.GetModel(ctx, id)
+	return t.GetModel(ctx, id)
 }
 
-func (s *Store) DeleteModel(ctx context.Context, id int64) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM models WHERE id = ?`, id)
+func (t *Scope) DeleteModel(ctx context.Context, id int64) error {
+	res, err := t.s.db.ExecContext(ctx,
+		`DELETE FROM models
+		 WHERE id = ? AND provider_id IN (SELECT id FROM providers WHERE team_id = ?)`, id, t.teamID)
 	if err != nil {
 		return fmt.Errorf("delete model %d: %w", id, err)
 	}
@@ -257,14 +265,29 @@ type DiscoveredModel struct {
 // response, a transient failure, or a temporary withdrawal, and losing an
 // operator's configuration over that would be a bad trade. Rows that were not
 // seen simply keep their older last_seen_at, which the UI surfaces.
-func (s *Store) SyncModels(ctx context.Context, providerID int64, found []DiscoveredModel) (*SyncResult, error) {
+func (t *Scope) SyncModels(ctx context.Context, providerID int64, found []DiscoveredModel) (*SyncResult, error) {
 	now := time.Now().Unix()
 
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := t.s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin model sync: %w", err)
 	}
 	defer tx.Rollback()
+
+	// The provider is proved to belong to this team once, as the transaction's
+	// first statement; everything after it is keyed on that same provider id.
+	// Repeating the check inside each statement would mean the per-model upsert
+	// stops being a single prepared statement, and this is the one statement
+	// here that runs once per discovered model.
+	var ok int
+	err = tx.QueryRowContext(ctx,
+		`SELECT 1 FROM providers WHERE id = ? AND team_id = ?`, providerID, t.teamID).Scan(&ok)
+	if err == sql.ErrNoRows {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("check provider %d: %w", providerID, err)
+	}
 
 	existing := map[string]bool{}
 	rows, err := tx.QueryContext(ctx, `SELECT upstream_model_id FROM models WHERE provider_id = ?`, providerID)
@@ -314,8 +337,12 @@ func (s *Store) SyncModels(ctx context.Context, providerID int64, found []Discov
 		}
 	}
 
+	// Redundant after the guard above, but providers is an ownership root and
+	// every write to one carries the predicate. An invariant with one
+	// exception is an invariant somebody has to remember.
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE providers SET models_synced_at = ? WHERE id = ?`, now, providerID); err != nil {
+		`UPDATE providers SET models_synced_at = ? WHERE id = ? AND team_id = ?`,
+		now, providerID, t.teamID); err != nil {
 		return nil, fmt.Errorf("record sync time: %w", err)
 	}
 
@@ -335,10 +362,12 @@ func (s *Store) SyncModels(ctx context.Context, providerID int64, found []Discov
 // AmbiguousModelIDs returns upstream ids offered by more than one enabled
 // provider. The Models page flags these, because calling them unqualified
 // resolves by provider priority rather than by the operator's intent.
-func (s *Store) AmbiguousModelIDs(ctx context.Context) (map[string]bool, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT m.upstream_model_id FROM models m JOIN providers p ON p.id = m.provider_id
-		 WHERE m.enabled = 1 AND p.enabled = 1
+//
+// Ambiguity is a fact about one team: two teams offering the same upstream id
+// are not competing to resolve it.
+func (t *Scope) AmbiguousModelIDs(ctx context.Context) (map[string]bool, error) {
+	rows, err := t.queryViaProvider(ctx, "m.upstream_model_id", "models", "m",
+		`AND m.enabled = 1 AND p.enabled = 1
 		 GROUP BY m.upstream_model_id HAVING COUNT(DISTINCT m.provider_id) > 1`)
 	if err != nil {
 		return nil, fmt.Errorf("find ambiguous models: %w", err)
@@ -356,9 +385,15 @@ func (s *Store) AmbiguousModelIDs(ctx context.Context) (map[string]bool, error) 
 }
 
 // ModelCountsByProvider powers the per-provider "327 models" summary.
-func (s *Store) ModelCountsByProvider(ctx context.Context) (map[int64]int, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT provider_id, COUNT(*) FROM models GROUP BY provider_id`)
+//
+// This is the one read over models that had no join to hang the predicate on.
+// It gets the same join every other read here uses rather than a subquery of
+// its own: models.provider_id is NOT NULL and references providers, so the
+// inner join matches each row exactly once and the counts are the counts this
+// query always returned.
+func (t *Scope) ModelCountsByProvider(ctx context.Context) (map[int64]int, error) {
+	rows, err := t.queryViaProvider(ctx, "m.provider_id, COUNT(*)", "models", "m",
+		`GROUP BY m.provider_id`)
 	if err != nil {
 		return nil, fmt.Errorf("count models by provider: %w", err)
 	}

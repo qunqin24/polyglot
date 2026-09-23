@@ -18,9 +18,10 @@ func TestAnAPIKeyReadsBackButIsNotStoredInTheClear(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer st.Close()
+	tm := st.ForTeam(DefaultTeamID)
 
 	const secret = "pg-not-a-real-key-0123456789"
-	key, err := st.CreateAPIKey(ctx, "reusable", secret[:11], secret)
+	key, err := tm.CreateAPIKey(ctx, "reusable", secret[:11], secret)
 	if err != nil {
 		t.Fatalf("create key: %v", err)
 	}
@@ -28,7 +29,7 @@ func TestAnAPIKeyReadsBackButIsNotStoredInTheClear(t *testing.T) {
 		t.Error("a freshly created key reports that it cannot be shown")
 	}
 
-	got, err := st.APIKeySecret(ctx, key.ID)
+	got, err := tm.APIKeySecret(ctx, key.ID)
 	if err != nil {
 		t.Fatalf("read the secret back: %v", err)
 	}
@@ -69,8 +70,9 @@ func TestSecretOfAMissingKeyIsNotFound(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer st.Close()
+	tm := st.ForTeam(DefaultTeamID)
 
-	if _, err := st.APIKeySecret(ctx, 404); err != ErrNotFound {
+	if _, err := tm.APIKeySecret(ctx, 404); err != ErrNotFound {
 		t.Errorf("secret of a missing key = %v, want ErrNotFound", err)
 	}
 }

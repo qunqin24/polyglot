@@ -13,6 +13,9 @@ import (
 func plant(t *testing.T, st *store.Store, l *store.RequestLog) {
 	t.Helper()
 	now := time.Now()
+	if l.TeamID == 0 {
+		l.TeamID = store.DefaultTeamID
+	}
 	if l.StartedAt.IsZero() {
 		l.StartedAt, l.FinishedAt = now, now
 	}
@@ -47,7 +50,7 @@ func TestModelStatsSeparateProviders(t *testing.T) {
 	plant(t, h.store, &store.RequestLog{ProviderName: "slow", UpstreamModel: "gpt-x",
 		TTFTMS: ptr(int64(900)), OutputTPS: ptrF(10)})
 
-	stats, err := h.store.ModelStats(context.Background(), time.Now().Add(-time.Hour))
+	stats, err := h.team().ModelStats(context.Background(), time.Now().Add(-time.Hour))
 	if err != nil {
 		t.Fatalf("stats: %v", err)
 	}
@@ -79,7 +82,7 @@ func TestTTFTUsesTheTailNotTheMean(t *testing.T) {
 			TTFTMS: ptr(int64(3000))})
 	}
 
-	stats, err := h.store.ModelStats(context.Background(), time.Now().Add(-time.Hour))
+	stats, err := h.team().ModelStats(context.Background(), time.Now().Add(-time.Hour))
 	if err != nil {
 		t.Fatalf("stats: %v", err)
 	}
@@ -105,7 +108,7 @@ func TestTPSMedianResistsAnOutlier(t *testing.T) {
 	plant(t, h.store, &store.RequestLog{ProviderName: "p", UpstreamModel: "m",
 		OutputTPS: ptrF(9000)})
 
-	stats, err := h.store.ModelStats(context.Background(), time.Now().Add(-time.Hour))
+	stats, err := h.team().ModelStats(context.Background(), time.Now().Add(-time.Hour))
 	if err != nil {
 		t.Fatalf("stats: %v", err)
 	}
@@ -125,7 +128,7 @@ func TestZeroMillisecondTPSIsTreatedAsUnmeasurable(t *testing.T) {
 	plant(t, h.store, &store.RequestLog{RequestID: "real-stream", ProviderName: "p", UpstreamModel: "m",
 		GenerationMS: &valid, OutputTPS: ptrF(50)})
 
-	logs, err := h.store.ListRequestLogs(context.Background(), store.LogFilter{Limit: 10})
+	logs, err := h.team().ListRequestLogs(context.Background(), store.LogFilter{Limit: 10})
 	if err != nil {
 		t.Fatalf("logs: %v", err)
 	}
@@ -136,7 +139,7 @@ func TestZeroMillisecondTPSIsTreatedAsUnmeasurable(t *testing.T) {
 		}
 	}
 
-	stats, err := h.store.ModelStats(context.Background(), time.Now().Add(-time.Hour))
+	stats, err := h.team().ModelStats(context.Background(), time.Now().Add(-time.Hour))
 	if err != nil {
 		t.Fatalf("stats: %v", err)
 	}
@@ -156,7 +159,7 @@ func TestCancelledRequestsAreNotCountedAsFailures(t *testing.T) {
 	plant(t, h.store, &store.RequestLog{ProviderName: "p", UpstreamModel: "m",
 		Status: "error", ErrorType: "rate_limit"})
 
-	stats, err := h.store.ModelStats(context.Background(), time.Now().Add(-time.Hour))
+	stats, err := h.team().ModelStats(context.Background(), time.Now().Add(-time.Hour))
 	if err != nil {
 		t.Fatalf("stats: %v", err)
 	}
@@ -180,7 +183,7 @@ func TestStreamedCountQualifiesTheSpeedNumbers(t *testing.T) {
 	plant(t, h.store, &store.RequestLog{ProviderName: "p", UpstreamModel: "m",
 		OutputTPS: ptrF(42), TTFTMS: ptr(int64(120))})
 
-	stats, err := h.store.ModelStats(context.Background(), time.Now().Add(-time.Hour))
+	stats, err := h.team().ModelStats(context.Background(), time.Now().Add(-time.Hour))
 	if err != nil {
 		t.Fatalf("stats: %v", err)
 	}
@@ -200,7 +203,7 @@ func TestAnUnusedModelHasNoSpeedNumbers(t *testing.T) {
 
 	plant(t, h.store, &store.RequestLog{ProviderName: "p", UpstreamModel: "never-streamed"})
 
-	stats, err := h.store.ModelStats(context.Background(), time.Now().Add(-time.Hour))
+	stats, err := h.team().ModelStats(context.Background(), time.Now().Add(-time.Hour))
 	if err != nil {
 		t.Fatalf("stats: %v", err)
 	}
@@ -230,7 +233,7 @@ func TestTokenTotalsAreSummedPerModel(t *testing.T) {
 	plant(t, h.store, &store.RequestLog{ProviderName: "p", UpstreamModel: "other",
 		InputTokens: 9999, OutputTokens: 9999})
 
-	stats, err := h.store.ModelStats(context.Background(), time.Now().Add(-time.Hour))
+	stats, err := h.team().ModelStats(context.Background(), time.Now().Add(-time.Hour))
 	if err != nil {
 		t.Fatalf("stats: %v", err)
 	}
@@ -260,7 +263,7 @@ func TestTokenTotalsAreZeroWhenNoUsageWasReported(t *testing.T) {
 
 	plant(t, h.store, &store.RequestLog{ProviderName: "p", UpstreamModel: "quiet"})
 
-	stats, err := h.store.ModelStats(context.Background(), time.Now().Add(-time.Hour))
+	stats, err := h.team().ModelStats(context.Background(), time.Now().Add(-time.Hour))
 	if err != nil {
 		t.Fatalf("stats: %v", err)
 	}

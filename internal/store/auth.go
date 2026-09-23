@@ -224,6 +224,16 @@ type APIKey struct {
 	// before Polyglot kept the ciphertext have only a hash, and no amount of
 	// asking brings those back.
 	Revealable bool `json:"revealable"`
+	// TeamID and TeamName say which team owns this key, and they are how the
+	// gateway learns the team at all: the key carries it, so APIKeyByHash
+	// resolving a secret resolves the tenant with it.
+	//
+	// Both are json:"-", the same tag Provider.APIKey carries. This struct is
+	// what the admin API serialises, and a team field in that JSON would be a
+	// user-visible change on the day the tenant dimension landed, which is the
+	// one thing this phase promised not to do.
+	TeamID   int64  `json:"-"`
+	TeamName string `json:"-"`
 }
 
 // How a key's budget window resets.
@@ -301,13 +311,23 @@ type APIKeyPolicy struct {
 	BudgetPeriod    string
 }
 
+// The team name travels as a correlated lookup rather than a join, because
+// every statement built from this list goes through the scoped constructors and
+// those own their FROM clause — there is nowhere for a caller to add a JOIN, and
+// that is the property keeping a predicate-less statement unwritable. The cost
+// is the same either way: a primary-key read of one row.
+//
+// It is also the kinder failure. An inner join would make a key whose team row
+// went missing disappear from the operator's list entirely; this leaves the name
+// empty and the key visible, which is the difference between a bad label and a
+// key that cannot be revoked because nothing shows it.
 const apiKeyCols = `id, name, prefix, enabled, created_at, last_used_at,
 	rpm, rph, rpd, tpm, tpd, max_concurrent, max_output_tokens, expires_at,
-	budget_usd, budget_period, budget_anchor, secret_enc IS NOT NULL`
+	budget_usd, budget_period, budget_anchor, secret_enc IS NOT NULL,
+	team_id, COALESCE((SELECT name FROM teams WHERE teams.id = api_keys.team_id), '')`
 
-func (s *Store) ListAPIKeys(ctx context.Context) ([]*APIKey, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+apiKeyCols+` FROM api_keys ORDER BY created_at DESC`)
+func (t *Scope) ListAPIKeys(ctx context.Context) ([]*APIKey, error) {
+	rows, err := t.query(ctx, apiKeyCols, ownedAPIKeys, `ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("list api keys: %w", err)
 	}
@@ -323,7 +343,7 @@ func (s *Store) ListAPIKeys(ctx context.Context) ([]*APIKey, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	if err := s.loadAPIKeyModels(ctx, out); err != nil {
+	if err := t.s.loadAPIKeyModels(ctx, out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -343,7 +363,8 @@ func scanAPIKey(sc interface{ Scan(...any) error }) (*APIKey, error) {
 	)
 	if err := sc.Scan(&k.ID, &k.Name, &k.Prefix, &enabled, &created, &lastUsed,
 		&rpm, &rph, &rpd, &tpm, &tpd, &concurrent, &output, &expires,
-		&budget, &k.BudgetPeriod, &anchor, &revealable); err != nil {
+		&budget, &k.BudgetPeriod, &anchor, &revealable,
+		&k.TeamID, &k.TeamName); err != nil {
 		return nil, err
 	}
 	k.Revealable = revealable != 0
@@ -379,27 +400,30 @@ func scanAPIKey(sc interface{ Scan(...any) error }) (*APIKey, error) {
 // CreateAPIKey takes the plaintext secret, not its hash: the row keeps both a
 // hash to authenticate against and a ciphertext so the operator can read the
 // key back. Callers hand over the plaintext once and never store it.
-func (s *Store) CreateAPIKey(ctx context.Context, name, prefix, secret string) (*APIKey, error) {
-	return s.CreateAPIKeyWithPolicy(ctx, name, prefix, secret, APIKeyPolicy{})
+func (t *Scope) CreateAPIKey(ctx context.Context, name, prefix, secret string) (*APIKey, error) {
+	return t.CreateAPIKeyWithPolicy(ctx, name, prefix, secret, APIKeyPolicy{})
 }
 
-func (s *Store) CreateAPIKeyWithPolicy(ctx context.Context, name, prefix, secret string, p APIKeyPolicy) (*APIKey, error) {
-	secretEnc, err := s.cipher.Encrypt(secret)
+func (t *Scope) CreateAPIKeyWithPolicy(ctx context.Context, name, prefix, secret string, p APIKeyPolicy) (*APIKey, error) {
+	secretEnc, err := t.s.cipher.Encrypt(secret)
 	if err != nil {
 		return nil, fmt.Errorf("encrypt api key: %w", err)
 	}
 	now := time.Now().Unix()
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := t.s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin create api key: %w", err)
 	}
 	defer tx.Rollback()
+	// team_id is named here rather than left to the column default: migration
+	// 0020 defaults it to 0 and aborts the insert on that value, so an INSERT
+	// that forgets its team fails loudly instead of landing in the default one.
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO api_keys (name, prefix, secret_hash, secret_enc, enabled, created_at,
+		`INSERT INTO api_keys (team_id, name, prefix, secret_hash, secret_enc, enabled, created_at,
 		 rpm, rph, rpd, tpm, tpd, max_concurrent, max_output_tokens, expires_at,
 		 budget_usd, budget_period, budget_anchor)
-		 VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		name, prefix, HashToken(secret), secretEnc, now,
+		 VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		t.teamID, name, prefix, HashToken(secret), secretEnc, now,
 		nullPositive(p.RPM), nullPositive(p.RPH), nullPositive(p.RPD),
 		nullPositive(p.TPM), nullPositive(p.TPD), nullPositive(p.MaxConcurrent),
 		nullPositive(p.MaxOutputTokens), nullTime(p.ExpiresAt),
@@ -416,12 +440,15 @@ func (s *Store) CreateAPIKeyWithPolicy(ctx context.Context, name, prefix, secret
 		return nil, fmt.Errorf("commit create api key: %w", err)
 	}
 	anchor := time.Unix(now, 0).UTC()
+	// The row is assembled here rather than read back, so TeamName is left
+	// empty: it is a display label the creating caller never needs, and costing
+	// a second query for it would be paying to restate what TeamID already says.
 	return &APIKey{ID: id, Name: name, Prefix: prefix, Enabled: true, CreatedAt: time.Unix(now, 0),
 		RPM: positivePtr(p.RPM), RPH: positivePtr(p.RPH), RPD: positivePtr(p.RPD),
 		TPM: positivePtr(p.TPM), TPD: positivePtr(p.TPD), MaxConcurrent: positivePtr(p.MaxConcurrent),
 		MaxOutputTokens: positivePtr(p.MaxOutputTokens), ExpiresAt: p.ExpiresAt, AllowedModels: models,
 		BudgetUSD: positiveMoney(p.BudgetUSD), BudgetPeriod: budgetPeriodOr(p.BudgetPeriod),
-		BudgetAnchor: &anchor, Revealable: true}, nil
+		BudgetAnchor: &anchor, Revealable: true, TeamID: t.teamID}, nil
 }
 
 // ErrSecretUnavailable reports a key created before Polyglot kept the
@@ -430,10 +457,9 @@ var ErrSecretUnavailable = errors.New("this key was created before Polyglot stor
 
 // APIKeySecret returns the plaintext of a key the operator already owns. Only
 // the admin API calls this, and it never reaches a request path.
-func (s *Store) APIKeySecret(ctx context.Context, id int64) (string, error) {
+func (t *Scope) APIKeySecret(ctx context.Context, id int64) (string, error) {
 	var enc []byte
-	err := s.db.QueryRowContext(ctx,
-		`SELECT secret_enc FROM api_keys WHERE id = ?`, id).Scan(&enc)
+	err := t.queryRow(ctx, `secret_enc`, ownedAPIKeys, `AND id = ?`, id).Scan(&enc)
 	if err == sql.ErrNoRows {
 		return "", ErrNotFound
 	}
@@ -443,7 +469,7 @@ func (s *Store) APIKeySecret(ctx context.Context, id int64) (string, error) {
 	if len(enc) == 0 {
 		return "", ErrSecretUnavailable
 	}
-	secret, err := s.cipher.Decrypt(enc)
+	secret, err := t.s.cipher.Decrypt(enc)
 	if err != nil {
 		return "", fmt.Errorf("decrypt api key secret: %w", err)
 	}
@@ -452,6 +478,13 @@ func (s *Store) APIKeySecret(ctx context.Context, id int64) (string, error) {
 
 // APIKeyByHash looks up an active key. Callers pass the SHA-256 of the
 // presented token; the plaintext never reaches the database.
+//
+// This is one of the two lookups that *discover* a team rather than work inside
+// one, so it stays on *Store and takes no scope. Asking it to filter by team
+// would be circular: the team is what it returns. That is also why
+// api_keys.secret_hash stays globally unique — the presented token is the whole
+// of what the caller supplies, and it has to name exactly one row across the
+// deployment for the answer to mean anything.
 func (s *Store) APIKeyByHash(ctx context.Context, hash string) (*APIKey, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT `+apiKeyCols+` FROM api_keys WHERE secret_hash = ?`, hash)
@@ -468,41 +501,48 @@ func (s *Store) APIKeyByHash(ctx context.Context, hash string) (*APIKey, error) 
 	return k, nil
 }
 
-func (s *Store) GetAPIKey(ctx context.Context, id int64) (*APIKey, error) {
-	k, err := scanAPIKey(s.db.QueryRowContext(ctx, `SELECT `+apiKeyCols+` FROM api_keys WHERE id = ?`, id))
+func (t *Scope) GetAPIKey(ctx context.Context, id int64) (*APIKey, error) {
+	k, err := scanAPIKey(t.queryRow(ctx, apiKeyCols, ownedAPIKeys, `AND id = ?`, id))
 	if err == sql.ErrNoRows {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("get api key: %w", err)
 	}
-	if err := s.loadAPIKeyModels(ctx, []*APIKey{k}); err != nil {
+	if err := t.s.loadAPIKeyModels(ctx, []*APIKey{k}); err != nil {
 		return nil, err
 	}
 	return k, nil
 }
 
-func (s *Store) UpdateAPIKey(ctx context.Context, id int64, name string, enabled bool, p APIKeyPolicy) (*APIKey, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
+func (t *Scope) UpdateAPIKey(ctx context.Context, id int64, name string, enabled bool, p APIKeyPolicy) (*APIKey, error) {
+	tx, err := t.s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin update api key: %w", err)
 	}
 	defer tx.Rollback()
+	// The team predicate is written out here instead of coming from Scope.exec:
+	// this UPDATE and the api_key_models rewrite below it have to land in the
+	// same transaction, and the constructors run on the connection, not on a tx.
+	//
 	// Changing the period starts the new window now. Counting a fresh monthly
 	// cap against last year's spending, or a "total" against everything the key
 	// ever did, would exhaust it the moment it was set.
 	res, err := tx.ExecContext(ctx, `UPDATE api_keys SET name = ?, enabled = ?, rpm = ?, rph = ?, rpd = ?,
 		tpm = ?, tpd = ?, max_concurrent = ?, max_output_tokens = ?, expires_at = ?,
 		budget_usd = ?, budget_anchor = CASE WHEN budget_period = ? THEN budget_anchor ELSE ? END,
-		budget_period = ? WHERE id = ?`,
+		budget_period = ? WHERE team_id = ? AND id = ?`,
 		name, boolInt(enabled), nullPositive(p.RPM), nullPositive(p.RPH), nullPositive(p.RPD),
 		nullPositive(p.TPM), nullPositive(p.TPD), nullPositive(p.MaxConcurrent),
 		nullPositive(p.MaxOutputTokens), nullTime(p.ExpiresAt),
 		nullBudget(p.BudgetUSD), budgetPeriodOr(p.BudgetPeriod), time.Now().Unix(),
-		budgetPeriodOr(p.BudgetPeriod), id)
+		budgetPeriodOr(p.BudgetPeriod), t.teamID, id)
 	if err != nil {
 		return nil, fmt.Errorf("update api key: %w", err)
 	}
+	// This check is what keeps api_key_models from needing a predicate of its
+	// own: another team's id affects no rows and stops here, before the child
+	// rows are touched.
 	if n, _ := res.RowsAffected(); n == 0 {
 		return nil, ErrNotFound
 	}
@@ -512,22 +552,26 @@ func (s *Store) UpdateAPIKey(ctx context.Context, id int64, name string, enabled
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit update api key: %w", err)
 	}
-	return s.GetAPIKey(ctx, id)
+	return t.GetAPIKey(ctx, id)
 }
 
 // APIKeyNameTaken reports whether another key already answers to this name.
 // exceptID is the key being renamed, which does not count against itself.
-func (s *Store) APIKeyNameTaken(ctx context.Context, name string, exceptID int64) (bool, error) {
+//
+// It is scoped because the uniqueness it pre-checks is scoped: migration 0020
+// replaced the global name index with UNIQUE(team_id, name). A global check
+// here would refuse a name that the index would have accepted.
+func (t *Scope) APIKeyNameTaken(ctx context.Context, name string, exceptID int64) (bool, error) {
 	var n int
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM api_keys WHERE name = ? AND id <> ?`, name, exceptID).Scan(&n); err != nil {
+	if err := t.queryRow(ctx, `COUNT(*)`, ownedAPIKeys,
+		`AND name = ? AND id <> ?`, name, exceptID).Scan(&n); err != nil {
 		return false, fmt.Errorf("check api key name: %w", err)
 	}
 	return n > 0, nil
 }
 
-func (s *Store) SetAPIKeyEnabled(ctx context.Context, id int64, enabled bool) error {
-	res, err := s.db.ExecContext(ctx, `UPDATE api_keys SET enabled = ? WHERE id = ?`, boolInt(enabled), id)
+func (t *Scope) SetAPIKeyEnabled(ctx context.Context, id int64, enabled bool) error {
+	res, err := t.exec(ctx, `UPDATE SET enabled = ?`, ownedAPIKeys, `AND id = ?`, boolInt(enabled), id)
 	if err != nil {
 		return fmt.Errorf("set api key enabled: %w", err)
 	}
@@ -537,13 +581,17 @@ func (s *Store) SetAPIKeyEnabled(ctx context.Context, id int64, enabled bool) er
 	return nil
 }
 
-func (s *Store) TouchAPIKey(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE api_keys SET last_used_at = ? WHERE id = ?`, time.Now().Unix(), id)
+// TouchAPIKey records that the key was just used. The id came from
+// APIKeyByHash, so the team predicate cannot change which row this finds — it
+// is here anyway, because an invariant with one remembered exception is not an
+// invariant.
+func (t *Scope) TouchAPIKey(ctx context.Context, id int64) error {
+	_, err := t.exec(ctx, `UPDATE SET last_used_at = ?`, ownedAPIKeys, `AND id = ?`, time.Now().Unix(), id)
 	return err
 }
 
-func (s *Store) DeleteAPIKey(ctx context.Context, id int64) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM api_keys WHERE id = ?`, id)
+func (t *Scope) DeleteAPIKey(ctx context.Context, id int64) error {
+	res, err := t.exec(ctx, `DELETE`, ownedAPIKeys, `AND id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("delete api key: %w", err)
 	}
@@ -559,10 +607,10 @@ func (s *Store) DeleteAPIKey(ctx context.Context, id int64) error {
 // difference between "spent nothing" and "spent an amount nobody can state":
 // a model with no price leaves cost_usd null, and a budget that silently
 // treated that as zero would be a cap on the priced half of the traffic.
-func (s *Store) APIKeySpendSince(ctx context.Context, id int64, since time.Time) (float64, int, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT COALESCE(SUM(cost_usd), 0),
-		COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END), 0)
-		FROM request_logs WHERE api_key_id = ? AND started_at >= ?`,
+func (t *Scope) APIKeySpendSince(ctx context.Context, id int64, since time.Time) (float64, int, error) {
+	row := t.queryRow(ctx, `COALESCE(SUM(cost_usd), 0),
+		COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END), 0)`,
+		ownedRequestLogs, `AND api_key_id = ? AND started_at >= ?`,
 		id, since.UnixMilli())
 	var spent float64
 	var unpriced int
@@ -574,8 +622,8 @@ func (s *Store) APIKeySpendSince(ctx context.Context, id int64, since time.Time)
 
 // ResetAPIKeyBudget starts a new total window. The request logs are untouched:
 // what was spent still happened, this only moves the line it is counted from.
-func (s *Store) ResetAPIKeyBudget(ctx context.Context, id int64, at time.Time) error {
-	res, err := s.db.ExecContext(ctx, `UPDATE api_keys SET budget_anchor = ? WHERE id = ?`, at.Unix(), id)
+func (t *Scope) ResetAPIKeyBudget(ctx context.Context, id int64, at time.Time) error {
+	res, err := t.exec(ctx, `UPDATE SET budget_anchor = ?`, ownedAPIKeys, `AND id = ?`, at.Unix(), id)
 	if err != nil {
 		return fmt.Errorf("reset api key budget: %w", err)
 	}
@@ -594,9 +642,9 @@ type APIKeyUsageSample struct {
 // APIKeyUsageSince rebuilds the in-memory rolling windows after a restart.
 // Request logs are the durable source of truth; reasoning tokens are not added
 // because providers disagree about whether they are already in output_tokens.
-func (s *Store) APIKeyUsageSince(ctx context.Context, id int64, since time.Time) ([]APIKeyUsageSample, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT started_at, finished_at, input_tokens + output_tokens
-		FROM request_logs WHERE api_key_id = ? AND (started_at >= ? OR finished_at >= ?)
+func (t *Scope) APIKeyUsageSince(ctx context.Context, id int64, since time.Time) ([]APIKeyUsageSample, error) {
+	rows, err := t.query(ctx, `started_at, finished_at, input_tokens + output_tokens`,
+		ownedRequestLogs, `AND api_key_id = ? AND (started_at >= ? OR finished_at >= ?)
 		AND NOT (error_type = 'rate_limit' AND provider_id IS NULL) ORDER BY started_at`,
 		id, since.UnixMilli(), since.UnixMilli())
 	if err != nil {
@@ -616,6 +664,17 @@ func (s *Store) APIKeyUsageSince(ctx context.Context, id int64, since time.Time)
 	return out, rows.Err()
 }
 
+// loadAPIKeyModels fills in the allow-lists for keys already fetched. It stays
+// on *Store because the global APIKeyByHash calls it, and its one SELECT reads
+// api_key_models for every team, keeping only the rows whose api_key_id is in
+// the map it was handed.
+//
+// That is not a leak — nothing crosses into a caller's result that was not
+// already in its own list of keys — but it is the one statement in this file
+// that reads past the team boundary, so it is worth saying out loud rather than
+// leaving to look like a missed predicate. api_key_models has no team_id of its
+// own by design: it hangs off api_keys with ON DELETE CASCADE, so its team is
+// already a settled fact.
 func (s *Store) loadAPIKeyModels(ctx context.Context, keys []*APIKey) error {
 	if len(keys) == 0 {
 		return nil

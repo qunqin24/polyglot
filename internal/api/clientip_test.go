@@ -83,7 +83,7 @@ func TestKeyOriginsGroupsAddresses(t *testing.T) {
 		io.WriteString(w, okChatResponse)
 	}, "openai")
 
-	keys, err := h.store.ListAPIKeys(context.Background())
+	keys, err := h.team().ListAPIKeys(context.Background())
 	if err != nil || len(keys) == 0 {
 		t.Fatalf("list keys: %v", err)
 	}
@@ -98,13 +98,14 @@ func TestKeyOriginsGroupsAddresses(t *testing.T) {
 
 	now := time.Now()
 	if err := h.store.InsertRequestLogs(context.Background(), []*store.RequestLog{{
+		TeamID:    store.DefaultTeamID,
 		StartedAt: now, FinishedAt: now, Status: "success", StatusCode: 200,
 		ClientProtocol: "openai", APIKeyID: &keyID, ClientIP: "203.0.113.9",
 	}}); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
 
-	origins, err := h.store.APIKeyOrigins(context.Background(), keyID, now.Add(-time.Hour), 20)
+	origins, err := h.team().APIKeyOrigins(context.Background(), keyID, now.Add(-time.Hour), 20)
 	if err != nil {
 		t.Fatalf("origins: %v", err)
 	}

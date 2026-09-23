@@ -70,7 +70,7 @@ func TestLogFidelityIsNeverNull(t *testing.T) {
 	for range 40 {
 		time.Sleep(100 * time.Millisecond)
 		var err error
-		logs, err = h.store.ListRequestLogs(t.Context(), store.LogFilter{Limit: 1})
+		logs, err = h.team().ListRequestLogs(t.Context(), store.LogFilter{Limit: 1})
 		if err != nil {
 			t.Fatalf("list logs: %v", err)
 		}

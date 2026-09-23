@@ -18,6 +18,7 @@ func TestLogsSupportOffsetPaginationAndTotal(t *testing.T) {
 	rows := make([]*store.RequestLog, 0, 5)
 	for i := range 5 {
 		rows = append(rows, &store.RequestLog{
+			TeamID:    store.DefaultTeamID,
 			StartedAt: now.Add(time.Duration(i) * time.Second), FinishedAt: now,
 			Status: "success", StatusCode: http.StatusOK, ClientProtocol: "openai",
 			ModelAlias: "pagination-model",

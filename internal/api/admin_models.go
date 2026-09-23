@@ -23,7 +23,7 @@ func (s *Server) handleAddProviderModels(w http.ResponseWriter, r *http.Request)
 		writeErr(w, http.StatusBadRequest, "invalid provider id")
 		return
 	}
-	if _, err := s.store.GetProvider(r.Context(), id); err != nil {
+	if _, err := s.team().GetProvider(r.Context(), id); err != nil {
 		writeErr(w, storeErrStatus(err), "%v", err)
 		return
 	}
@@ -60,17 +60,17 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 		f.Offset = v
 	}
 
-	models, err := s.store.ListModels(r.Context(), f)
+	models, err := s.team().ListModels(r.Context(), f)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
-	total, err := s.store.CountModels(r.Context(), f)
+	total, err := s.team().CountModels(r.Context(), f)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
-	ambiguous, err := s.store.AmbiguousModelIDs(r.Context())
+	ambiguous, err := s.team().AmbiguousModelIDs(r.Context())
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "%v", err)
 		return
@@ -117,7 +117,7 @@ func (s *Server) handleCreateModel(w http.ResponseWriter, r *http.Request) {
 			router.NamespaceSeparator)
 		return
 	}
-	if _, err := s.store.GetProvider(r.Context(), in.ProviderID); err != nil {
+	if _, err := s.team().GetProvider(r.Context(), in.ProviderID); err != nil {
 		writeErr(w, storeErrStatus(err), "%v", err)
 		return
 	}
@@ -132,7 +132,7 @@ func (s *Server) handleCreateModel(w http.ResponseWriter, r *http.Request) {
 		m.Enabled = *in.Enabled
 	}
 
-	created, err := s.store.CreateModel(r.Context(), m)
+	created, err := s.team().CreateModel(r.Context(), m)
 	if err != nil {
 		if isUniqueViolation(err) {
 			writeErr(w, http.StatusConflict, "this provider already has a model %q", in.UpstreamModelID)
@@ -158,7 +158,7 @@ func (s *Server) handleUpdateModel(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid request body: %v", err)
 		return
 	}
-	m, err := s.store.UpdateModel(r.Context(), id, strings.TrimSpace(in.DisplayName), in.Enabled)
+	m, err := s.team().UpdateModel(r.Context(), id, strings.TrimSpace(in.DisplayName), in.Enabled)
 	if err != nil {
 		writeErr(w, storeErrStatus(err), "%v", err)
 		return
@@ -172,7 +172,7 @@ func (s *Server) handleDeleteModel(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid model id")
 		return
 	}
-	if err := s.store.DeleteModel(r.Context(), id); err != nil {
+	if err := s.team().DeleteModel(r.Context(), id); err != nil {
 		writeErr(w, storeErrStatus(err), "%v", err)
 		return
 	}
@@ -225,7 +225,7 @@ func (in *aliasInput) toStore() *store.ModelAlias {
 }
 
 func (s *Server) handleListAliases(w http.ResponseWriter, r *http.Request) {
-	list, err := s.store.ListAliases(r.Context())
+	list, err := s.team().ListAliases(r.Context())
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "%v", err)
 		return
@@ -243,7 +243,7 @@ func (s *Server) handleCreateAlias(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "%s", msg)
 		return
 	}
-	a, err := s.store.CreateAlias(r.Context(), in.toStore())
+	a, err := s.team().CreateAlias(r.Context(), in.toStore())
 	if err != nil {
 		if isUniqueViolation(err) {
 			writeErr(w, http.StatusConflict, "this alias already points at that provider and model")
@@ -270,7 +270,7 @@ func (s *Server) handleUpdateAlias(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "%s", msg)
 		return
 	}
-	a, err := s.store.UpdateAlias(r.Context(), id, in.toStore())
+	a, err := s.team().UpdateAlias(r.Context(), id, in.toStore())
 	if err != nil {
 		writeErr(w, storeErrStatus(err), "%v", err)
 		return
@@ -284,7 +284,7 @@ func (s *Server) handleDeleteAlias(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid alias id")
 		return
 	}
-	if err := s.store.DeleteAlias(r.Context(), id); err != nil {
+	if err := s.team().DeleteAlias(r.Context(), id); err != nil {
 		writeErr(w, storeErrStatus(err), "%v", err)
 		return
 	}

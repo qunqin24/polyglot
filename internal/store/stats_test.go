@@ -20,6 +20,7 @@ func statsStore(t *testing.T) *Store {
 func logAt(ago time.Duration, mutate func(*RequestLog)) *RequestLog {
 	now := time.Now()
 	l := &RequestLog{
+		TeamID:           DefaultTeamID,
 		RequestID:        "req",
 		StartedAt:        now.Add(-ago),
 		FinishedAt:       now.Add(-ago).Add(time.Second),
@@ -51,12 +52,13 @@ func write(t *testing.T, st *Store, logs ...*RequestLog) {
 // claim traffic that never happened.
 func TestSeriesFillsQuietBuckets(t *testing.T) {
 	st := statsStore(t)
+	tm := st.ForTeam(DefaultTeamID)
 	write(t, st,
 		logAt(30*time.Minute, nil),
 		logAt(90*time.Minute, nil),
 	)
 
-	s, err := st.Stats(context.Background(), time.Now().Add(-6*time.Hour))
+	s, err := tm.Stats(context.Background(), time.Now().Add(-6*time.Hour))
 	if err != nil {
 		t.Fatalf("stats: %v", err)
 	}
@@ -90,13 +92,14 @@ func TestSeriesFillsQuietBuckets(t *testing.T) {
 // of those is what stops the total reading as a complete bill.
 func TestCostStatsKeepUnpricedOutOfTheTotal(t *testing.T) {
 	st := statsStore(t)
+	tm := st.ForTeam(DefaultTeamID)
 	priced := 0.25
 	write(t, st,
 		logAt(time.Minute, func(l *RequestLog) { l.CostUSD = &priced }),
 		logAt(2*time.Minute, nil), // no price at all
 	)
 
-	cs, err := st.CostStats(context.Background(), time.Now().Add(-time.Hour))
+	cs, err := tm.CostStats(context.Background(), time.Now().Add(-time.Hour))
 	if err != nil {
 		t.Fatalf("cost stats: %v", err)
 	}
@@ -122,6 +125,7 @@ func TestCostStatsKeepUnpricedOutOfTheTotal(t *testing.T) {
 // adds up to what was actually spent.
 func TestCostStacksFoldTheRemainderInsteadOfDroppingIt(t *testing.T) {
 	st := statsStore(t)
+	tm := st.ForTeam(DefaultTeamID)
 	var logs []*RequestLog
 	var total float64
 	for i := range 9 {
@@ -135,7 +139,7 @@ func TestCostStacksFoldTheRemainderInsteadOfDroppingIt(t *testing.T) {
 	}
 	write(t, st, logs...)
 
-	cs, err := st.CostStats(context.Background(), time.Now().Add(-time.Hour))
+	cs, err := tm.CostStats(context.Background(), time.Now().Add(-time.Hour))
 	if err != nil {
 		t.Fatalf("cost stats: %v", err)
 	}
@@ -161,6 +165,7 @@ func TestCostStacksFoldTheRemainderInsteadOfDroppingIt(t *testing.T) {
 // JSON, and which is empty on most rows.
 func TestConversionStatsCountPairsAndFidelityNotes(t *testing.T) {
 	st := statsStore(t)
+	tm := st.ForTeam(DefaultTeamID)
 	write(t, st,
 		logAt(time.Minute, nil), // openai -> openai, no notes
 		logAt(2*time.Minute, func(l *RequestLog) {
@@ -176,7 +181,7 @@ func TestConversionStatsCountPairsAndFidelityNotes(t *testing.T) {
 		}),
 	)
 
-	cs, err := st.ConversionStats(context.Background(), time.Now().Add(-time.Hour))
+	cs, err := tm.ConversionStats(context.Background(), time.Now().Add(-time.Hour))
 	if err != nil {
 		t.Fatalf("conversion stats: %v", err)
 	}
@@ -216,6 +221,7 @@ func TestConversionStatsCountPairsAndFidelityNotes(t *testing.T) {
 // looking for.
 func TestLatencyStatsReportPercentilesAndTheWholeSpread(t *testing.T) {
 	st := statsStore(t)
+	tm := st.ForTeam(DefaultTeamID)
 	var logs []*RequestLog
 	for i := range 100 {
 		ms := int64(50 + i*10) // 50ms .. 1040ms
@@ -231,7 +237,7 @@ func TestLatencyStatsReportPercentilesAndTheWholeSpread(t *testing.T) {
 	}
 	write(t, st, logs...)
 
-	ls, err := st.LatencyStats(context.Background(), time.Now().Add(-time.Hour))
+	ls, err := tm.LatencyStats(context.Background(), time.Now().Add(-time.Hour))
 	if err != nil {
 		t.Fatalf("latency stats: %v", err)
 	}

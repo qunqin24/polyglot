@@ -77,18 +77,19 @@ func TestEveryProviderCoolingFallsBackToTryingAnyway(t *testing.T) {
 
 	h := newHarness(t, nil, "openai", withSetup(func(t *testing.T, st *store.Store, first int64) {
 		ctx := context.Background()
+		tm := st.ForTeam(store.DefaultTeamID)
 		for _, spec := range []struct {
 			name, url string
 			priority  int
 		}{{"alpha", upA, 10}, {"beta", upB, 5}} {
-			p, err := st.CreateProvider(ctx, &store.Provider{
+			p, err := tm.CreateProvider(ctx, &store.Provider{
 				Name: spec.name, Protocol: "openai", BaseURL: spec.url,
 				Enabled: true, Priority: spec.priority,
 			})
 			if err != nil {
 				t.Fatalf("create provider: %v", err)
 			}
-			if _, err := st.CreateModel(ctx, &store.Model{
+			if _, err := tm.CreateModel(ctx, &store.Model{
 				ProviderID: p.ID, UpstreamModelID: "shared", Enabled: true,
 			}); err != nil {
 				t.Fatalf("create model: %v", err)
@@ -117,7 +118,7 @@ func TestASoleProviderIsNeverSkipped(t *testing.T) {
 	var hits int
 	h := newHarness(t, newCountingHandler(&hits), "openai")
 
-	p, err := h.store.ProviderByName(context.Background(), "fake")
+	p, err := h.team().ProviderByName(context.Background(), "fake")
 	if err != nil {
 		t.Fatalf("get provider: %v", err)
 	}
@@ -144,7 +145,8 @@ func newCountingHandler(counter *int) http.HandlerFunc {
 
 func mustListProviders(t *testing.T, st *store.Store) []*store.Provider {
 	t.Helper()
-	list, err := st.ListProviders(context.Background())
+	tm := st.ForTeam(store.DefaultTeamID)
+	list, err := tm.ListProviders(context.Background())
 	if err != nil {
 		t.Fatalf("list providers: %v", err)
 	}
@@ -172,14 +174,15 @@ func TestARejectedCredentialDisablesTheProviderWhenAskedTo(t *testing.T) {
 	var rejected int
 	h := newHarness(t, nil, "openai", withSetup(func(t *testing.T, st *store.Store, first int64) {
 		ctx := context.Background()
-		p, err := st.CreateProvider(ctx, &store.Provider{
+		tm := st.ForTeam(store.DefaultTeamID)
+		p, err := tm.CreateProvider(ctx, &store.Provider{
 			Name: "expired", Protocol: "openai", BaseURL: authRejectingUpstream(t, &rejected),
 			Enabled: true, Priority: 100, AutoDisableOnAuthError: true,
 		})
 		if err != nil {
 			t.Fatalf("create provider: %v", err)
 		}
-		if _, err := st.CreateModel(ctx, &store.Model{
+		if _, err := tm.CreateModel(ctx, &store.Model{
 			ProviderID: p.ID, UpstreamModelID: "shared", Enabled: true,
 		}); err != nil {
 			t.Fatalf("create model: %v", err)
@@ -191,7 +194,7 @@ func TestARejectedCredentialDisablesTheProviderWhenAskedTo(t *testing.T) {
 		readAll(t, h.post("/v1/chat/completions", chat("shared"), nil))
 	}
 
-	p, err := h.store.ProviderByName(context.Background(), "expired")
+	p, err := h.team().ProviderByName(context.Background(), "expired")
 	if err != nil {
 		t.Fatalf("get provider: %v", err)
 	}
@@ -220,14 +223,15 @@ func TestModelPermissionErrorsDoNotDisableTheProvider(t *testing.T) {
 	})
 	h := newHarness(t, nil, "openai", withSetup(func(t *testing.T, st *store.Store, first int64) {
 		ctx := context.Background()
-		p, err := st.CreateProvider(ctx, &store.Provider{
+		tm := st.ForTeam(store.DefaultTeamID)
+		p, err := tm.CreateProvider(ctx, &store.Provider{
 			Name: "restricted", Protocol: "openai", BaseURL: upstream,
 			Enabled: true, Priority: 100, AutoDisableOnAuthError: true,
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := st.CreateModel(ctx, &store.Model{
+		if _, err := tm.CreateModel(ctx, &store.Model{
 			ProviderID: p.ID, UpstreamModelID: "restricted-model", Enabled: true,
 		}); err != nil {
 			t.Fatal(err)
@@ -240,7 +244,7 @@ func TestModelPermissionErrorsDoNotDisableTheProvider(t *testing.T) {
 			t.Fatalf("want upstream permission error, got %d: %s", resp.StatusCode, body)
 		}
 	}
-	p, err := h.store.ProviderByName(context.Background(), "restricted")
+	p, err := h.team().ProviderByName(context.Background(), "restricted")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,14 +258,15 @@ func TestARejectedCredentialDoesNotDisableByDefault(t *testing.T) {
 	var rejected int
 	h := newHarness(t, nil, "openai", withSetup(func(t *testing.T, st *store.Store, first int64) {
 		ctx := context.Background()
-		p, err := st.CreateProvider(ctx, &store.Provider{
+		tm := st.ForTeam(store.DefaultTeamID)
+		p, err := tm.CreateProvider(ctx, &store.Provider{
 			Name: "expired", Protocol: "openai", BaseURL: authRejectingUpstream(t, &rejected),
 			Enabled: true, Priority: 100,
 		})
 		if err != nil {
 			t.Fatalf("create provider: %v", err)
 		}
-		if _, err := st.CreateModel(ctx, &store.Model{
+		if _, err := tm.CreateModel(ctx, &store.Model{
 			ProviderID: p.ID, UpstreamModelID: "shared", Enabled: true,
 		}); err != nil {
 			t.Fatalf("create model: %v", err)
@@ -272,7 +277,7 @@ func TestARejectedCredentialDoesNotDisableByDefault(t *testing.T) {
 		readAll(t, h.post("/v1/chat/completions", chat("shared"), nil))
 	}
 
-	p, err := h.store.ProviderByName(context.Background(), "expired")
+	p, err := h.team().ProviderByName(context.Background(), "expired")
 	if err != nil {
 		t.Fatalf("get provider: %v", err)
 	}
@@ -287,23 +292,23 @@ func TestEnablingAProviderClearsTheReason(t *testing.T) {
 	h := newHarness(t, nil, "openai")
 	ctx := context.Background()
 
-	p, err := h.store.ProviderByName(ctx, "fake")
+	p, err := h.team().ProviderByName(ctx, "fake")
 	if err != nil {
 		t.Fatalf("get provider: %v", err)
 	}
-	if err := h.store.DisableProvider(ctx, p.ID, "credential rejected"); err != nil {
+	if err := h.team().DisableProvider(ctx, p.ID, "credential rejected"); err != nil {
 		t.Fatalf("disable: %v", err)
 	}
-	off, _ := h.store.GetProvider(ctx, p.ID)
+	off, _ := h.team().GetProvider(ctx, p.ID)
 	if off.Enabled || off.DisabledReason == "" {
 		t.Fatalf("provider was not disabled with a reason: %+v", off)
 	}
 
 	off.Enabled = true
-	if _, err := h.store.UpdateProvider(ctx, p.ID, off, nil); err != nil {
+	if _, err := h.team().UpdateProvider(ctx, p.ID, off, nil); err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	back, _ := h.store.GetProvider(ctx, p.ID)
+	back, _ := h.team().GetProvider(ctx, p.ID)
 	if back.DisabledReason != "" || back.DisabledAt != nil {
 		t.Errorf("a stale reason survived re-enabling: %q / %v", back.DisabledReason, back.DisabledAt)
 	}
@@ -316,6 +321,7 @@ func TestAnAnthropicClientPrefersTheAnthropicUpstream(t *testing.T) {
 
 	h := newHarness(t, nil, "openai", withSetup(func(t *testing.T, st *store.Store, first int64) {
 		ctx := context.Background()
+		tm := st.ForTeam(store.DefaultTeamID)
 		specs := []struct {
 			name, proto, url string
 		}{
@@ -336,14 +342,14 @@ func TestAnAnthropicClientPrefersTheAnthropicUpstream(t *testing.T) {
 		for _, spec := range specs {
 			// Equal priority: the operator ranked them the same, which is the
 			// only situation the preference is allowed to act in.
-			p, err := st.CreateProvider(ctx, &store.Provider{
+			p, err := tm.CreateProvider(ctx, &store.Provider{
 				Name: spec.name, Protocol: spec.proto, BaseURL: spec.url,
 				Enabled: true, Priority: 5,
 			})
 			if err != nil {
 				t.Fatalf("create provider: %v", err)
 			}
-			if _, err := st.CreateModel(ctx, &store.Model{
+			if _, err := tm.CreateModel(ctx, &store.Model{
 				ProviderID: p.ID, UpstreamModelID: "shared", Enabled: true,
 			}); err != nil {
 				t.Fatalf("create model: %v", err)

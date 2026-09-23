@@ -280,7 +280,7 @@ func (s *Server) handleProtocols(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
-	stats, err := s.store.Stats(r.Context(), statsWindow(r))
+	stats, err := s.team().Stats(r.Context(), statsWindow(r))
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "%v", err)
 		return
@@ -306,7 +306,7 @@ func statsWindow(r *http.Request) time.Time {
 // page everyone leaves open stay cheap to refresh.
 
 func (s *Server) handleConversionStats(w http.ResponseWriter, r *http.Request) {
-	stats, err := s.store.ConversionStats(r.Context(), statsWindow(r))
+	stats, err := s.team().ConversionStats(r.Context(), statsWindow(r))
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "%v", err)
 		return
@@ -315,7 +315,7 @@ func (s *Server) handleConversionStats(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLatencyStats(w http.ResponseWriter, r *http.Request) {
-	stats, err := s.store.LatencyStats(r.Context(), statsWindow(r))
+	stats, err := s.team().LatencyStats(r.Context(), statsWindow(r))
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "%v", err)
 		return
@@ -324,7 +324,7 @@ func (s *Server) handleLatencyStats(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCostStats(w http.ResponseWriter, r *http.Request) {
-	stats, err := s.store.CostStats(r.Context(), statsWindow(r))
+	stats, err := s.team().CostStats(r.Context(), statsWindow(r))
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "%v", err)
 		return

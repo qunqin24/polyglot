@@ -101,7 +101,7 @@ func (l *KeyLimiter) Acquire(ctx context.Context, key *store.APIKey) (*QuotaLeas
 		l.keys[key.ID] = state
 	}
 	if !state.loaded {
-		samples, err := l.store.APIKeyUsageSince(ctx, key.ID, oldest)
+		samples, err := l.store.ForTeam(key.TeamID).APIKeyUsageSince(ctx, key.ID, oldest)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -145,7 +145,7 @@ func (l *KeyLimiter) checkBudget(ctx context.Context, key *store.APIKey, state *
 	// the anchor; either way a different window means the figure is stale.
 	start := key.BudgetWindowStart(now)
 	if !state.spendLoaded || !state.spendWindow.Equal(start) {
-		spent, _, err := l.store.APIKeySpendSince(ctx, key.ID, start)
+		spent, _, err := l.store.ForTeam(key.TeamID).APIKeySpendSince(ctx, key.ID, start)
 		if err != nil {
 			return nil, err
 		}

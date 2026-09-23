@@ -199,7 +199,7 @@ func (l *Logger) price(rec *store.RequestLog) {
 }
 
 func (l *Logger) prune(ctx context.Context) {
-	if err := l.st.PruneLogContents(); err != nil {
+	if err := l.st.PruneLogContents(ctx); err != nil {
 		l.log.Error("prune content logs", "error", err)
 	}
 	if l.retention <= 0 {

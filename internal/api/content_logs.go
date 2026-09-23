@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -15,7 +16,7 @@ import (
 )
 
 func (s *Server) handleContentLogSettings(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, s.store.ContentLogging())
+	writeJSON(w, 200, s.store.ContentLogging(store.DefaultTeamID))
 }
 func (s *Server) handleSetContentLogSettings(w http.ResponseWriter, r *http.Request) {
 	var in store.ContentLogSettings
@@ -27,14 +28,14 @@ func (s *Server) handleSetContentLogSettings(w http.ResponseWriter, r *http.Requ
 		writeErr(w, 400, "retention_days must be 3, 7, or 30")
 		return
 	}
-	if err := s.store.SetContentLogging(r.Context(), in); err != nil {
+	if err := s.store.SetContentLogging(r.Context(), store.DefaultTeamID, in); err != nil {
 		writeErr(w, 500, "save content logging settings: %v", err)
 		return
 	}
 	writeJSON(w, 200, in)
 }
 func (s *Server) handleListLogKeys(w http.ResponseWriter, r *http.Request) {
-	keys, err := s.store.ListLogKeys(r.Context())
+	keys, err := s.team().ListLogKeys(r.Context())
 	if err != nil {
 		writeErr(w, 500, "list log keys: %v", err)
 		return
@@ -60,7 +61,7 @@ func (s *Server) handleCreateLogKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	secret := "plog_" + idgen.Secret()
-	key, err := s.store.CreateLogKey(r.Context(), in.Name, secret, in.ExpiresAt)
+	key, err := s.team().CreateLogKey(r.Context(), in.Name, secret, in.ExpiresAt)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") {
 			writeErr(w, 409, "a log key with this name already exists")
@@ -78,7 +79,7 @@ func (s *Server) handleDeleteLogKey(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "invalid key id")
 		return
 	}
-	if err := s.store.DeleteLogKey(r.Context(), id); err != nil {
+	if err := s.team().DeleteLogKey(r.Context(), id); err != nil {
 		writeErr(w, storeErrStatus(err), "%v", err)
 		return
 	}
@@ -95,7 +96,8 @@ func (s *Server) logKeyAuth(next http.Handler) http.Handler {
 			writeErr(w, 401, "a dedicated log API key is required")
 			return
 		}
-		if err := s.store.AuthorizeLogKey(r.Context(), fields[1]); err != nil {
+		teamID, err := s.store.AuthorizeLogKey(r.Context(), fields[1])
+		if err != nil {
 			if errors.Is(err, store.ErrNotFound) {
 				writeErr(w, 401, "invalid or expired log API key")
 			} else {
@@ -103,16 +105,51 @@ func (s *Server) logKeyAuth(next http.Handler) http.Handler {
 			}
 			return
 		}
-		next.ServeHTTP(w, r)
+		// The credential is what says which team's logs this is. Everything
+		// below reads prompts and completions, so the team travels with the
+		// request from the one lookup that discovered it, and no handler picks
+		// a team of its own.
+		next.ServeHTTP(w, r.WithContext(withLogKeyTeam(r.Context(), teamID)))
 	})
 }
+
+// logKeyTeamCtxKey carries the team a log key belongs to. It is unexported and
+// of an unexported type, so nothing outside this package can put a team into a
+// request and have a handler believe it.
+type logKeyTeamCtxKey struct{}
+
+func withLogKeyTeam(ctx context.Context, teamID int64) context.Context {
+	return context.WithValue(ctx, logKeyTeamCtxKey{}, teamID)
+}
+
+// logTeamID is the team whose logs this request is allowed to read.
+//
+// The log handlers are mounted twice: once behind the admin session, once
+// behind a log key. An administrator reads the one team every deployment has;
+// a log key reads its own team and nothing else. This is the highest-stakes
+// distinction in the tenant work — a log key reads prompt and completion text
+// verbatim — and while only one team exists, getting it wrong would not make a
+// single test go red. That is precisely why the answer comes from the
+// credential rather than from the handler.
+func (s *Server) logTeamID(r *http.Request) int64 {
+	if teamID, ok := r.Context().Value(logKeyTeamCtxKey{}).(int64); ok {
+		return teamID
+	}
+	return store.DefaultTeamID
+}
+
+func (s *Server) logTeam(r *http.Request) *store.Scope { return s.store.ForTeam(s.logTeamID(r)) }
 func (s *Server) contentFile(w http.ResponseWriter, r *http.Request) (io.ReadCloser, bool) {
 	id, err := idParam(r, "id")
 	if err != nil {
 		writeErr(w, 400, "invalid log id")
 		return nil, false
 	}
-	rec, err := s.store.GetRequestLog(r.Context(), id)
+	teamID := s.logTeamID(r)
+	// The scoped lookup is the boundary: a log row belonging to another team
+	// comes back as ErrNotFound, so a content id from that row is never reached
+	// in the first place.
+	rec, err := s.store.ForTeam(teamID).GetRequestLog(r.Context(), id)
 	if err != nil {
 		writeErr(w, storeErrStatus(err), "%v", err)
 		return nil, false
@@ -121,7 +158,7 @@ func (s *Server) contentFile(w http.ResponseWriter, r *http.Request) (io.ReadClo
 		writeErr(w, 404, "content was not recorded for this request")
 		return nil, false
 	}
-	f, err := s.store.OpenLogContent(rec.ContentID)
+	f, err := s.store.OpenLogContent(teamID, rec.ContentID)
 	if err != nil {
 		writeErr(w, storeErrStatus(err), "content is expired or unavailable")
 		return nil, false
@@ -220,7 +257,7 @@ func (s *Server) handleLogExport(w http.ResponseWriter, r *http.Request) {
 // The public description is authenticated alongside the logs and gives agents
 // the exact paths, byte encoding, pagination and retention semantics.
 func (s *Server) handleLogAPIInfo(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, map[string]any{"version": 1, "authentication": "Authorization: Bearer <dedicated log key>", "retention_days": s.store.ContentLogging().RetentionDays,
+	writeJSON(w, 200, map[string]any{"version": 1, "authentication": "Authorization: Bearer <dedicated log key>", "retention_days": s.store.ContentLogging(s.logTeamID(r)).RetentionDays,
 		"endpoints": []string{"GET /api/logs/v1/requests", "GET /api/logs/v1/requests/{id}", "GET /api/logs/v1/requests/{id}/content", "GET /api/logs/v1/requests/{id}/content/{stage}", "GET /api/logs/v1/requests/{id}/export"},
 		"filters":   []string{"request_id", "status", "model", "protocol", "provider_id", "client_ip", "client_app", "since (RFC3339)", "until (RFC3339)", "with_content=true", "before (id cursor)", "limit (1..200)"},
 		"content":   "Read the manifest, then fetch each stage with offset and limit byte pagination. data is base64; concatenate decoded bytes before UTF-8 decoding. Check complete, content_error and has_more. The export is gzip JSONL; data events are base64, start events describe stages.",

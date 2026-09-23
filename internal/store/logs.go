@@ -79,6 +79,18 @@ type RequestLog struct {
 	// CostNote records what the number rests on when it is not exact, e.g. a
 	// missing cache price that the plain input price stood in for.
 	CostNote string `json:"cost_note"`
+	// TeamID and TeamName are which team made this request, snapshotted exactly
+	// the way APIKeyID and APIKeyName are: the id points at live configuration
+	// that may not outlive the log row, and the name is what makes the row
+	// legible once it does not. Deleting a team deletes its configuration, not
+	// its history, so team_id carries no foreign key and nothing cascades.
+	//
+	// Both are json:"-". This struct is what the log API serialises, and the
+	// day the logs page really renders a team name is the day the tag comes
+	// off — a one-line change, made from columns that were already written
+	// correctly, instead of a backfill over history.
+	TeamID   int64  `json:"-"`
+	TeamName string `json:"-"`
 }
 
 const logCols = `id, request_id, started_at, finished_at, latency_ms, ttft_ms, generation_ms, output_tps,
@@ -87,7 +99,8 @@ const logCols = `id, request_id, started_at, finished_at, latency_ms, ttft_ms, g
 	api_key_id, api_key_name, client_ip, client_app, request_user, request_metadata,
 	stream, input_tokens, output_tokens, cached_input_tokens, cache_write_tokens, reasoning_tokens,
 	retry_count, fallback_count, error_type, error_message, fidelity_notes,
-	cost_usd, cost_source, cost_note, content_id, content_error`
+	cost_usd, cost_source, cost_note, content_id, content_error,
+	team_id, team_name`
 
 func scanLog(sc interface{ Scan(...any) error }) (*RequestLog, error) {
 	var (
@@ -108,7 +121,8 @@ func scanLog(sc interface{ Scan(...any) error }) (*RequestLog, error) {
 		&apiKeyID, &l.APIKeyName, &l.ClientIP, &l.ClientApp, &l.RequestUser, &l.RequestMetadata,
 		&stream, &l.InputTokens, &l.OutputTokens, &l.CachedInputTokens, &l.CacheWriteTokens, &l.ReasoningTokens,
 		&l.RetryCount, &l.FallbackCount, &l.ErrorType, &l.ErrorMessage, &l.FidelityNotes,
-		&cost, &l.CostSource, &l.CostNote, &l.ContentID, &l.ContentError)
+		&cost, &l.CostSource, &l.CostNote, &l.ContentID, &l.ContentError,
+		&l.TeamID, &l.TeamName)
 	if err != nil {
 		return nil, err
 	}
@@ -145,6 +159,17 @@ func scanLog(sc interface{ Scan(...any) error }) (*RequestLog, error) {
 
 // InsertRequestLogs writes a batch in one transaction. The gateway buffers
 // records in memory and flushes them here.
+//
+// It stays on *Store, and that is not an oversight: it writes team_id per row
+// rather than filtering by one team. A single buffered flush carries rows from
+// every team that made a request during the window, so a scoped version of this
+// could only ever write one team's share of a batch.
+//
+// request_logs is also the one ownable table migration 0020 left without an
+// insert trigger, because this is its only writer and it sits on the flush
+// path. A record that reached here with no team lands as team_id = 0 — the
+// findable orphan the migration's DEFAULT 0 exists to produce, rather than a
+// row quietly filed under the default team.
 func (s *Store) InsertRequestLogs(ctx context.Context, logs []*RequestLog) error {
 	if len(logs) == 0 {
 		return nil
@@ -162,8 +187,9 @@ func (s *Store) InsertRequestLogs(ctx context.Context, logs []*RequestLog) error
 		api_key_id, api_key_name, client_ip, client_app, request_user, request_metadata,
 		stream, input_tokens, output_tokens, cached_input_tokens, cache_write_tokens, reasoning_tokens,
 		retry_count, fallback_count, error_type, error_message, fidelity_notes,
-		cost_usd, cost_source, cost_note, content_id, content_error
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		cost_usd, cost_source, cost_note, content_id, content_error,
+		team_id, team_name
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return fmt.Errorf("prepare log insert: %w", err)
 	}
@@ -181,7 +207,8 @@ func (s *Store) InsertRequestLogs(ctx context.Context, logs []*RequestLog) error
 			l.InputTokens, l.OutputTokens, l.CachedInputTokens, l.CacheWriteTokens, l.ReasoningTokens,
 			l.RetryCount, l.FallbackCount,
 			l.ErrorType, truncate(l.ErrorMessage, 2000), l.FidelityNotes,
-			nullFloat64(l.CostUSD), l.CostSource, l.CostNote, l.ContentID, l.ContentError)
+			nullFloat64(l.CostUSD), l.CostSource, l.CostNote, l.ContentID, l.ContentError,
+			l.TeamID, l.TeamName)
 		if err != nil {
 			return fmt.Errorf("insert request log: %w", err)
 		}
@@ -208,6 +235,14 @@ type LogFilter struct {
 	ClientApp   string
 }
 
+// logFilterWhere builds the caller's half of the predicate, not the whole
+// clause. It opens with AND because the scoped constructor has already opened
+// the WHERE with the team predicate, and it returns the empty string when the
+// filter narrows nothing — which is now a filter that matches this team's rows,
+// where before it matched the table.
+//
+// LogFilter gains no team field. Scope is where the team comes from, and a
+// filter that could carry one would be a filter somebody could leave unset.
 func logFilterWhere(f LogFilter) (string, []any) {
 	var where []string
 	var args []any
@@ -257,10 +292,10 @@ func logFilterWhere(f LogFilter) (string, []any) {
 	if len(where) == 0 {
 		return "", args
 	}
-	return " WHERE " + strings.Join(where, " AND "), args
+	return "AND " + strings.Join(where, " AND "), args
 }
 
-func (s *Store) ListRequestLogs(ctx context.Context, f LogFilter) ([]*RequestLog, error) {
+func (t *Scope) ListRequestLogs(ctx context.Context, f LogFilter) ([]*RequestLog, error) {
 	where, args := logFilterWhere(f)
 	limit := f.Limit
 	if limit <= 0 || limit > 200 {
@@ -270,10 +305,10 @@ func (s *Store) ListRequestLogs(ctx context.Context, f LogFilter) ([]*RequestLog
 	if offset < 0 {
 		offset = 0
 	}
-	q := `SELECT ` + logCols + ` FROM request_logs` + where + ` ORDER BY id DESC LIMIT ? OFFSET ?`
 	args = append(args, limit, offset)
 
-	rows, err := s.db.QueryContext(ctx, q, args...)
+	rows, err := t.query(ctx, logCols, ownedRequestLogs,
+		where+` ORDER BY id DESC LIMIT ? OFFSET ?`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list request logs: %w", err)
 	}
@@ -291,17 +326,21 @@ func (s *Store) ListRequestLogs(ctx context.Context, f LogFilter) ([]*RequestLog
 
 // CountRequestLogs returns the number of rows matching the same filters used
 // by ListRequestLogs. The admin API uses it to offer direct page navigation.
-func (s *Store) CountRequestLogs(ctx context.Context, f LogFilter) (int64, error) {
+func (t *Scope) CountRequestLogs(ctx context.Context, f LogFilter) (int64, error) {
 	where, args := logFilterWhere(f)
 	var total int64
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM request_logs`+where, args...).Scan(&total); err != nil {
+	if err := t.queryRow(ctx, `COUNT(*)`, ownedRequestLogs, where, args...).Scan(&total); err != nil {
 		return 0, fmt.Errorf("count request logs: %w", err)
 	}
 	return total, nil
 }
 
-func (s *Store) GetRequestLog(ctx context.Context, id int64) (*RequestLog, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT `+logCols+` FROM request_logs WHERE id = ?`, id)
+// GetRequestLog is the lookup every read of a stored request body goes through,
+// so another team's id has to come back as ErrNotFound and never as a refusal:
+// a 403 here would confirm that the row exists, which is the one thing a
+// caller who cannot see it must not learn.
+func (t *Scope) GetRequestLog(ctx context.Context, id int64) (*RequestLog, error) {
+	row := t.queryRow(ctx, logCols, ownedRequestLogs, `AND id = ?`, id)
 	l, err := scanLog(row)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotFound
@@ -313,6 +352,12 @@ func (s *Store) GetRequestLog(ctx context.Context, id int64) (*RequestLog, error
 }
 
 // PruneRequestLogs deletes rows older than the cutoff and returns the count.
+//
+// It stays on *Store deliberately. Retention here is LOG_RETENTION_DAYS, one
+// deployment-wide setting, and reclaiming disk is a deployment-wide act: a
+// scoped pruner would only ever delete the rows of whichever team happened to
+// be named, and every other team's logs would grow without limit while this
+// still looked like it was running. Do not move it onto *Scope in a tidy-up.
 func (s *Store) PruneRequestLogs(ctx context.Context, before time.Time) (int64, error) {
 	res, err := s.db.ExecContext(ctx, `DELETE FROM request_logs WHERE started_at < ?`, before.UnixMilli())
 	if err != nil {
@@ -348,14 +393,14 @@ type KeyOrigin struct {
 // first. This is the shape the "has this key leaked" question actually takes:
 // a key used from one place for months and then from somewhere else is
 // obvious here and invisible in a list of individual requests.
-func (s *Store) APIKeyOrigins(ctx context.Context, keyID int64, since time.Time, limit int) ([]KeyOrigin, error) {
+func (t *Scope) APIKeyOrigins(ctx context.Context, keyID int64, since time.Time, limit int) ([]KeyOrigin, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT client_ip, COUNT(*), MIN(started_at), MAX(started_at)
-		 FROM request_logs
-		 WHERE api_key_id = ? AND started_at >= ? AND client_ip != ''
+	rows, err := t.query(ctx,
+		`client_ip, COUNT(*), MIN(started_at), MAX(started_at)`,
+		ownedRequestLogs,
+		`AND api_key_id = ? AND started_at >= ? AND client_ip != ''
 		 GROUP BY client_ip
 		 ORDER BY COUNT(*) DESC, MAX(started_at) DESC
 		 LIMIT ?`, keyID, since.UnixMilli(), limit)
@@ -434,13 +479,13 @@ const maxStatRows = 50000
 // Percentiles are computed here rather than in SQL: SQLite has no percentile
 // function, and the alternatives (window functions per metric) are harder to
 // read than one pass over two columns.
-func (s *Store) ModelStats(ctx context.Context, since time.Time) ([]ModelStat, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT provider_name, upstream_model, status, error_type, started_at, ttft_ms, generation_ms, output_tps,
+func (t *Scope) ModelStats(ctx context.Context, since time.Time) ([]ModelStat, error) {
+	rows, err := t.query(ctx,
+		`provider_name, upstream_model, status, error_type, started_at, ttft_ms, generation_ms, output_tps,
 		        input_tokens, output_tokens, reasoning_tokens,
-		        cached_input_tokens, cache_write_tokens
-		 FROM request_logs
-		 WHERE started_at >= ? AND provider_name != '' AND upstream_model != ''
+		        cached_input_tokens, cache_write_tokens`,
+		ownedRequestLogs,
+		`AND started_at >= ? AND provider_name != '' AND upstream_model != ''
 		 ORDER BY id DESC LIMIT ?`, since.UnixMilli(), maxStatRows)
 	if err != nil {
 		return nil, fmt.Errorf("model stats: %w", err)

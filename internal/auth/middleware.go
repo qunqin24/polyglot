@@ -35,7 +35,7 @@ func Gateway(st *store.Store, proto protocol.Name) func(http.Handler) http.Handl
 					Code: "api_key_expired", Message: "API key has expired"})
 				return
 			}
-			touch.mark(key.ID)
+			touch.mark(key.TeamID, key.ID)
 			next.ServeHTTP(w, r.WithContext(withAPIKey(r.Context(), key)))
 		})
 	}
@@ -121,7 +121,10 @@ func newTouchLimiter(st *store.Store) *touchLimiter {
 	return &touchLimiter{st: st, at: map[int64]time.Time{}}
 }
 
-func (t *touchLimiter) mark(id int64) {
+// mark takes the team alongside the id because the write is scoped, not because
+// the rate limiting is: api_keys.id is a global autoincrement primary key, so
+// one map keyed on it still holds every key apart across teams.
+func (t *touchLimiter) mark(teamID, id int64) {
 	t.mu.Lock()
 	last, ok := t.at[id]
 	now := time.Now()
@@ -135,6 +138,6 @@ func (t *touchLimiter) mark(id int64) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		t.st.TouchAPIKey(ctx, id)
+		t.st.ForTeam(teamID).TouchAPIKey(ctx, id)
 	}()
 }

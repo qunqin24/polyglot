@@ -203,20 +203,20 @@ func TestScenarioAmbiguousModelID(t *testing.T) {
 
 	ctx := context.Background()
 	// B is created first but has the lower priority number, so A must win.
-	pb, err := h.store.CreateProvider(ctx, &store.Provider{
+	pb, err := h.team().CreateProvider(ctx, &store.Provider{
 		Name: "Beta", Protocol: "openai", BaseURL: upstreamB, Enabled: true, Priority: 1,
 	})
 	if err != nil {
 		t.Fatalf("create provider: %v", err)
 	}
-	pa, err := h.store.CreateProvider(ctx, &store.Provider{
+	pa, err := h.team().CreateProvider(ctx, &store.Provider{
 		Name: "Alpha", Protocol: "openai", BaseURL: upstreamA, Enabled: true, Priority: 10,
 	})
 	if err != nil {
 		t.Fatalf("create provider: %v", err)
 	}
 	for _, id := range []int64{pa.ID, pb.ID} {
-		if _, err := h.store.SyncModels(ctx, id, []store.DiscoveredModel{{ID: "shared-model"}}); err != nil {
+		if _, err := h.team().SyncModels(ctx, id, []store.DiscoveredModel{{ID: "shared-model"}}); err != nil {
 			t.Fatalf("sync: %v", err)
 		}
 	}
@@ -248,7 +248,7 @@ func TestScenarioAmbiguousModelID(t *testing.T) {
 	}
 
 	// The ambiguity must be visible to an operator.
-	ambiguous, err := h.store.AmbiguousModelIDs(ctx)
+	ambiguous, err := h.team().AmbiguousModelIDs(ctx)
 	if err != nil {
 		t.Fatalf("AmbiguousModelIDs: %v", err)
 	}
@@ -278,12 +278,12 @@ func TestScenarioAliasTakesPrecedenceOverRealModel(t *testing.T) {
 	ctx := context.Background()
 
 	// The upstream genuinely offers a model called "coding"...
-	if _, err := h.store.SyncModels(ctx, 1, []store.DiscoveredModel{{ID: "coding"}}); err != nil {
+	if _, err := h.team().SyncModels(ctx, 1, []store.DiscoveredModel{{ID: "coding"}}); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	// ...and the operator also defines an alias with that name pointing
 	// somewhere else. The alias is the deliberate instruction, so it wins.
-	if _, err := h.store.CreateAlias(ctx, &store.ModelAlias{
+	if _, err := h.team().CreateAlias(ctx, &store.ModelAlias{
 		Alias: "coding", ProviderID: 1, UpstreamModel: "upstream-model-x", Enabled: true,
 	}); err != nil {
 		t.Fatalf("create alias: %v", err)
@@ -302,30 +302,30 @@ func TestSyncDoesNotDeleteOrOverrideOperatorChoices(t *testing.T) {
 	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {}, "openai")
 	ctx := context.Background()
 
-	if _, err := h.store.SyncModels(ctx, 1, []store.DiscoveredModel{
+	if _, err := h.team().SyncModels(ctx, 1, []store.DiscoveredModel{
 		{ID: "model-a"}, {ID: "model-b"},
 	}); err != nil {
 		t.Fatalf("first sync: %v", err)
 	}
 	// The operator adds one by hand and turns another off.
-	if _, err := h.store.CreateModel(ctx, &store.Model{
+	if _, err := h.team().CreateModel(ctx, &store.Model{
 		ProviderID: 1, UpstreamModelID: "hand-added", Enabled: true,
 	}); err != nil {
 		t.Fatalf("create model: %v", err)
 	}
-	models, _ := h.store.ListModels(ctx, store.ModelFilter{ProviderID: 1})
+	models, _ := h.team().ListModels(ctx, store.ModelFilter{ProviderID: 1})
 	var bID int64
 	for _, m := range models {
 		if m.UpstreamModelID == "model-b" {
 			bID = m.ID
 		}
 	}
-	if _, err := h.store.UpdateModel(ctx, bID, "", false); err != nil {
+	if _, err := h.team().UpdateModel(ctx, bID, "", false); err != nil {
 		t.Fatalf("disable model: %v", err)
 	}
 
 	// A later sync returns only model-a: a partial or changed listing.
-	res, err := h.store.SyncModels(ctx, 1, []store.DiscoveredModel{{ID: "model-a"}})
+	res, err := h.team().SyncModels(ctx, 1, []store.DiscoveredModel{{ID: "model-a"}})
 	if err != nil {
 		t.Fatalf("second sync: %v", err)
 	}
@@ -333,7 +333,7 @@ func TestSyncDoesNotDeleteOrOverrideOperatorChoices(t *testing.T) {
 		t.Errorf("sync deleted rows: total = %d, want 3", res.Total)
 	}
 
-	after, _ := h.store.ListModels(ctx, store.ModelFilter{ProviderID: 1})
+	after, _ := h.team().ListModels(ctx, store.ModelFilter{ProviderID: 1})
 	byID := map[string]*store.Model{}
 	for _, m := range after {
 		byID[m.UpstreamModelID] = m

@@ -78,8 +78,26 @@ func (g *Gateway) Chat(w http.ResponseWriter, r *http.Request, opt Options) {
 		ClientProtocol: string(opt.ClientProtocol),
 		Status:         "error",
 	}
+	// The key is read here rather than at its first other use, because the team
+	// it carries is wanted earlier than anything else about it: content logging
+	// is a per-team switch, so whether this request is recorded at all is
+	// already a question about whose request it is.
+	//
+	// Every protocol endpoint sits behind auth.Gateway, so there is always a
+	// key and it always names a team. The fallback keeps a Gateway driven
+	// without that middleware on the team every deployment has, rather than on
+	// 0, the sentinel migration 0020 reserves for a row that lost its team.
+	key := auth.APIKeyFromContext(r.Context())
+	teamID := int64(store.DefaultTeamID)
+	if key != nil {
+		teamID = key.TeamID
+	}
+	// A scope is a handle rather than a query, so this costs nothing and every
+	// team-owned lookup below goes through it.
+	tm := g.Store.ForTeam(teamID)
+
 	var content *capture.Recorder
-	if g.Store != nil && g.Store.ContentLogging().Enabled {
+	if g.Store != nil && g.Store.ContentLogging(teamID).Enabled {
 		var err error
 		content, err = capture.New(g.Store.ContentDir())
 		if err != nil {
@@ -93,9 +111,14 @@ func (g *Gateway) Chat(w http.ResponseWriter, r *http.Request, opt Options) {
 		}
 	}
 
-	if key := auth.APIKeyFromContext(r.Context()); key != nil {
+	// The team is snapshotted onto the log row exactly like the key's name is:
+	// a finished request is a fact about the past, so deleting a team later
+	// must leave its history readable rather than pointing at nothing.
+	rec.TeamID = teamID
+	if key != nil {
 		rec.APIKeyID = &key.ID
 		rec.APIKeyName = key.Name
+		rec.TeamName = key.TeamName
 	}
 	rec.ClientIP = clientIP(r)
 	rec.ClientApp = clientApp(r)
@@ -112,7 +135,6 @@ func (g *Gateway) Chat(w http.ResponseWriter, r *http.Request, opt Options) {
 		}
 	}()
 
-	key := auth.APIKeyFromContext(r.Context())
 	if key != nil && g.KeyLimiter != nil {
 		var limitErr *auth.LimitError
 		var err error
@@ -189,7 +211,7 @@ func (g *Gateway) Chat(w http.ResponseWriter, r *http.Request, opt Options) {
 	tel.Streaming(creq.Stream)
 
 	route := tel.StartSpan("router.resolve")
-	candidates, err := g.Router.Resolve(r.Context(), creq.Model)
+	candidates, err := g.Router.Resolve(r.Context(), tm, creq.Model)
 	if err != nil {
 		// The model name a client asked for is not recorded on the span: an
 		// unresolved name is client-supplied text.
@@ -212,6 +234,7 @@ func (g *Gateway) Chat(w http.ResponseWriter, r *http.Request, opt Options) {
 	for i, cand := range candidates {
 		attempt := &attempt{
 			gw:          g,
+			tm:          tm,
 			content:     content,
 			number:      i + 1,
 			clientCodec: clientCodec,
@@ -312,8 +335,12 @@ type attempt struct {
 	diag        *canonical.Diagnostics
 	creq        *canonical.Request
 	cand        router.Resolution
-	rec         *store.RequestLog
-	tel         *telemetry.Request
+	// tm is the team this request belongs to, carried so that a provider
+	// disabled after repeated credential rejections is disabled in the
+	// registry that actually owns it.
+	tm  *store.Scope
+	rec *store.RequestLog
+	tel *telemetry.Request
 	// tried is this attempt's telemetry span, kept so the caller can attribute
 	// a retry to the provider that failed.
 	tried *telemetry.Attempt
@@ -327,7 +354,7 @@ func (a *attempt) failed(err *canonical.Error, wrote bool) attemptResult {
 		a.content.Body(capture.Stage{ID: fmt.Sprintf("upstream.%d.error", a.number), Kind: "attempt_error", Attempt: a.number}, b)
 	}
 	a.tried.Failed(telemetry.ErrorClass(err))
-	a.gw.noteFailure(a.cand.Target, err)
+	a.gw.noteFailure(a.tm, a.cand.Target, err)
 	return attemptResult{err: err, wrote: wrote}
 }
 
@@ -337,7 +364,7 @@ func (a *attempt) failed(err *canonical.Error, wrote bool) attemptResult {
 // A bad request is the caller's fault and says nothing about the provider, so
 // it is not held against it: marking a healthy provider unhealthy because a
 // client sent malformed JSON would be worse than not tracking health at all.
-func (g *Gateway) noteFailure(t *provider.Target, err *canonical.Error) {
+func (g *Gateway) noteFailure(tm *store.Scope, t *provider.Target, err *canonical.Error) {
 	if g.Health == nil || err == nil {
 		return
 	}
@@ -359,7 +386,7 @@ func (g *Gateway) noteFailure(t *provider.Target, err *canonical.Error) {
 		strikes, err.Message)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if dbErr := g.Store.DisableProvider(ctx, t.ID, reason); dbErr != nil {
+	if dbErr := tm.DisableProvider(ctx, t.ID, reason); dbErr != nil {
 		g.Log.Error("could not disable provider after auth failures", "provider", t.Name, "error", dbErr)
 		return
 	}

@@ -120,7 +120,8 @@ func newHarness(t *testing.T, upstreamHandler http.HandlerFunc, protocolName str
 	t.Cleanup(func() { cancel(); ul.Wait(time.Second) })
 
 	ctxBg := context.Background()
-	p, err := st.CreateProvider(ctxBg, &store.Provider{
+	tm := st.ForTeam(store.DefaultTeamID)
+	p, err := tm.CreateProvider(ctxBg, &store.Provider{
 		Name:     "fake",
 		Protocol: protocolName,
 		BaseURL:  upstream.URL,
@@ -131,7 +132,7 @@ func newHarness(t *testing.T, upstreamHandler http.HandlerFunc, protocolName str
 		t.Fatalf("create provider: %v", err)
 	}
 	// "my-model" is an alias, which exercises the optional naming layer.
-	if _, err := st.CreateAlias(ctxBg, &store.ModelAlias{
+	if _, err := tm.CreateAlias(ctxBg, &store.ModelAlias{
 		Alias:         "my-model",
 		ProviderID:    p.ID,
 		UpstreamModel: "upstream-model-x",
@@ -141,7 +142,7 @@ func newHarness(t *testing.T, upstreamHandler http.HandlerFunc, protocolName str
 	}
 
 	plaintext, prefix := auth.NewAPIKey()
-	if _, err := st.CreateAPIKey(ctxBg, "test", prefix, plaintext); err != nil {
+	if _, err := tm.CreateAPIKey(ctxBg, "test", prefix, plaintext); err != nil {
 		t.Fatalf("create api key: %v", err)
 	}
 
@@ -165,6 +166,10 @@ func newHarness(t *testing.T, upstreamHandler http.HandlerFunc, protocolName str
 		upstream: upstream, telemetry: tel, prices: prices,
 	}
 }
+
+// team is the handle a fixture reaches team-owned data through. There is always
+// exactly one team and the harness is it, so this is the harness's st.ForTeam.
+func (h *harness) team() *store.Scope { return h.store.ForTeam(store.DefaultTeamID) }
 
 // serverHealth reaches the provider health tracker the server built, so a test
 // can put a provider into cooldown without making it fail for real.
@@ -452,7 +457,7 @@ func TestRequestIsLogged(t *testing.T) {
 	for range 40 {
 		time.Sleep(100 * time.Millisecond)
 		var err error
-		logs, err = h.store.ListRequestLogs(context.Background(), store.LogFilter{Limit: 10})
+		logs, err = h.team().ListRequestLogs(context.Background(), store.LogFilter{Limit: 10})
 		if err != nil {
 			t.Fatalf("list logs: %v", err)
 		}

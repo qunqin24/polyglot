@@ -24,7 +24,7 @@ type Store struct {
 	db             *sql.DB
 	cipher         *Cipher
 	contentDir     string
-	contentLogging atomic.Pointer[ContentLogSettings]
+	contentLogging atomic.Pointer[map[int64]ContentLogSettings]
 	contentMu      sync.Mutex
 }
 

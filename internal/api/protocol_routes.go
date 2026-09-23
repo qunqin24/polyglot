@@ -11,7 +11,23 @@ import (
 	"github.com/qunqin24/polyglot/internal/canonical"
 	"github.com/qunqin24/polyglot/internal/gateway"
 	"github.com/qunqin24/polyglot/internal/protocol"
+	"github.com/qunqin24/polyglot/internal/store"
 )
+
+// callerTeam is the team of the API key that authenticated this request.
+//
+// Every client-facing endpoint sits behind auth.Gateway, so there is always a
+// key and it always names a team; the fallback only keeps a handler reached
+// without that middleware pointed at the team every deployment has rather than
+// at the sentinel 0. This is the one scope in phase 1 whose absence a client
+// could see: /v1/models would list another team's models.
+func (s *Server) callerTeam(r *http.Request) *store.Scope {
+	teamID := int64(store.DefaultTeamID)
+	if key := auth.APIKeyFromContext(r.Context()); key != nil {
+		teamID = key.TeamID
+	}
+	return s.store.ForTeam(teamID)
+}
 
 func (s *Server) handleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 	s.gw.Chat(w, r, gateway.Options{ClientProtocol: protocol.OpenAI})
@@ -65,7 +81,7 @@ func (s *Server) handleGeminiGenerate(w http.ResponseWriter, r *http.Request) {
 
 // handleGeminiListModels answers Gemini's own model listing shape.
 func (s *Server) handleGeminiListModels(w http.ResponseWriter, r *http.Request) {
-	entries, err := s.router.ListModels(r.Context())
+	entries, err := s.router.ListModels(r.Context(), s.callerTeam(r))
 	if err != nil {
 		writeProtocolError(w, protocol.Gemini, canonical.Errorf(canonical.ErrInternal, "%v", err))
 		return
@@ -88,7 +104,7 @@ func (s *Server) handleGeminiListModels(w http.ResponseWriter, r *http.Request) 
 // handleClientModelList answers /v1/models. The payload carries the OpenAI
 // fields and Anthropic's, so either SDK can read it from the same endpoint.
 func (s *Server) handleClientModelList(w http.ResponseWriter, r *http.Request) {
-	entries, err := s.router.ListModels(r.Context())
+	entries, err := s.router.ListModels(r.Context(), s.callerTeam(r))
 	if err != nil {
 		writeProtocolError(w, protocol.OpenAI, canonical.Errorf(canonical.ErrInternal, "%v", err))
 		return
@@ -110,7 +126,7 @@ func (s *Server) handleClientModelList(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleGetModel(w http.ResponseWriter, r *http.Request) {
 	alias := chi.URLParam(r, "model")
-	entries, err := s.router.ListModels(r.Context())
+	entries, err := s.router.ListModels(r.Context(), s.callerTeam(r))
 	if err != nil {
 		writeProtocolError(w, protocol.OpenAI, canonical.Errorf(canonical.ErrInternal, "%v", err))
 		return

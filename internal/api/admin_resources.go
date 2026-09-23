@@ -106,12 +106,12 @@ func (in *providerInput) toStore() *store.Provider {
 }
 
 func (s *Server) handleListProviders(w http.ResponseWriter, r *http.Request) {
-	list, err := s.store.ListProviders(r.Context())
+	list, err := s.team().ListProviders(r.Context())
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
-	counts, err := s.store.ModelCountsByProvider(r.Context())
+	counts, err := s.team().ModelCountsByProvider(r.Context())
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "%v", err)
 		return
@@ -140,7 +140,7 @@ func (s *Server) handleCreateProvider(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "%s", msg)
 		return
 	}
-	p, err := s.store.CreateProvider(r.Context(), in.toStore())
+	p, err := s.team().CreateProvider(r.Context(), in.toStore())
 	if err != nil {
 		if isUniqueViolation(err) {
 			writeErr(w, http.StatusConflict, "a provider named %q already exists", in.Name)
@@ -162,7 +162,7 @@ func (s *Server) handleCreateProvider(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if fresh, err := s.store.GetProvider(r.Context(), p.ID); err == nil {
+	if fresh, err := s.team().GetProvider(r.Context(), p.ID); err == nil {
 		p = fresh
 	}
 	p.ModelCount = added
@@ -185,7 +185,7 @@ func (s *Server) handleUpdateProvider(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "%s", msg)
 		return
 	}
-	p, err := s.store.UpdateProvider(r.Context(), id, in.toStore(), in.APIKey)
+	p, err := s.team().UpdateProvider(r.Context(), id, in.toStore(), in.APIKey)
 	// A fixed credential must take effect at once, not after the cooldown the
 	// broken one earned.
 	s.health.Forget(id)
@@ -203,7 +203,7 @@ func (s *Server) handleDeleteProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.health.Forget(id)
-	if err := s.store.DeleteProvider(r.Context(), id); err != nil {
+	if err := s.team().DeleteProvider(r.Context(), id); err != nil {
 		writeErr(w, storeErrStatus(err), "%v", err)
 		return
 	}
@@ -239,7 +239,7 @@ func (s *Server) handleTestProvider(w http.ResponseWriter, r *http.Request) {
 	if in.APIKey != nil {
 		key = *in.APIKey
 	} else if in.ID > 0 {
-		existing, err := s.store.GetProvider(r.Context(), in.ID)
+		existing, err := s.team().GetProvider(r.Context(), in.ID)
 		if err != nil {
 			writeErr(w, storeErrStatus(err), "%v", err)
 			return
@@ -303,7 +303,7 @@ func (s *Server) targetFromInput(r *http.Request, in *probeInput) (*provider.Tar
 	if in.APIKey != nil {
 		key = *in.APIKey
 	} else if in.ID > 0 {
-		existing, err := s.store.GetProvider(r.Context(), in.ID)
+		existing, err := s.team().GetProvider(r.Context(), in.ID)
 		if err != nil {
 			return nil, 0, err.Error()
 		}
@@ -357,7 +357,7 @@ func (s *Server) handleDiscoverProviderModels(w http.ResponseWriter, r *http.Req
 	// than inviting the operator to add it twice.
 	registered := map[string]bool{}
 	if in.ID > 0 {
-		existing, err := s.store.ListModels(r.Context(), store.ModelFilter{ProviderID: in.ID, Limit: 5000})
+		existing, err := s.team().ListModels(r.Context(), store.ModelFilter{ProviderID: in.ID, Limit: 5000})
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, "%v", err)
 			return
@@ -389,7 +389,7 @@ func (s *Server) handleProviderModels(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid provider id")
 		return
 	}
-	p, err := s.store.GetProvider(r.Context(), id)
+	p, err := s.team().GetProvider(r.Context(), id)
 	if err != nil {
 		writeErr(w, storeErrStatus(err), "%v", err)
 		return
@@ -563,7 +563,7 @@ func intValue(v *int) int {
 }
 
 func (s *Server) handleListKeys(w http.ResponseWriter, r *http.Request) {
-	list, err := s.store.ListAPIKeys(r.Context())
+	list, err := s.team().ListAPIKeys(r.Context())
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "%v", err)
 		return
@@ -584,7 +584,7 @@ func (s *Server) fillSpend(ctx context.Context, keys ...*store.APIKey) {
 		if k == nil || k.BudgetUSD == nil {
 			continue
 		}
-		spent, unpriced, err := s.store.APIKeySpendSince(ctx, k.ID, k.BudgetWindowStart(now))
+		spent, unpriced, err := s.team().APIKeySpendSince(ctx, k.ID, k.BudgetWindowStart(now))
 		if err != nil {
 			// A missing figure is not worth failing the page over; the UI
 			// shows a dash for it.
@@ -608,7 +608,7 @@ func (s *Server) handleResetKeyBudget(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid key id")
 		return
 	}
-	key, err := s.store.GetAPIKey(r.Context(), id)
+	key, err := s.team().GetAPIKey(r.Context(), id)
 	if err != nil {
 		writeErr(w, storeErrStatus(err), "%v", err)
 		return
@@ -617,11 +617,11 @@ func (s *Server) handleResetKeyBudget(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "only a total budget is reset by hand; this one resets on its own")
 		return
 	}
-	if err := s.store.ResetAPIKeyBudget(r.Context(), id, time.Now()); err != nil {
+	if err := s.team().ResetAPIKeyBudget(r.Context(), id, time.Now()); err != nil {
 		writeErr(w, storeErrStatus(err), "%v", err)
 		return
 	}
-	fresh, err := s.store.GetAPIKey(r.Context(), id)
+	fresh, err := s.team().GetAPIKey(r.Context(), id)
 	if err != nil {
 		writeErr(w, storeErrStatus(err), "%v", err)
 		return
@@ -640,7 +640,7 @@ func (s *Server) freeKeyName(ctx context.Context) (string, error) {
 		if n > 1 {
 			name = fmt.Sprintf("%s %d", base, n)
 		}
-		taken, err := s.store.APIKeyNameTaken(ctx, name, 0)
+		taken, err := s.team().APIKeyNameTaken(ctx, name, 0)
 		if err != nil {
 			return "", err
 		}
@@ -679,7 +679,7 @@ func (s *Server) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		taken, err := s.store.APIKeyNameTaken(r.Context(), name, 0)
+		taken, err := s.team().APIKeyNameTaken(r.Context(), name, 0)
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, "%v", err)
 			return
@@ -690,7 +690,7 @@ func (s *Server) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	plaintext, prefix := auth.NewAPIKey()
-	key, err := s.store.CreateAPIKeyWithPolicy(r.Context(), name, prefix, plaintext, policy)
+	key, err := s.team().CreateAPIKeyWithPolicy(r.Context(), name, prefix, plaintext, policy)
 	if err != nil {
 		if isUniqueViolation(err) {
 			writeErr(w, http.StatusConflict, "a key named %q already exists; names are unique so the key list and the request log can tell two keys apart", name)
@@ -717,7 +717,7 @@ func (s *Server) handleRevealKey(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid key id")
 		return
 	}
-	secret, err := s.store.APIKeySecret(r.Context(), id)
+	secret, err := s.team().APIKeySecret(r.Context(), id)
 	if errors.Is(err, store.ErrSecretUnavailable) {
 		writeErr(w, http.StatusGone, "%v", err)
 		return
@@ -746,14 +746,14 @@ func (s *Server) handleUpdateKey(w http.ResponseWriter, r *http.Request) {
 	}
 	// Preserve the compact enabled-only update used by the table switch.
 	if in.Name == nil && in.Policy == nil && in.Enabled != nil {
-		if err := s.store.SetAPIKeyEnabled(r.Context(), id, *in.Enabled); err != nil {
+		if err := s.team().SetAPIKeyEnabled(r.Context(), id, *in.Enabled); err != nil {
 			writeErr(w, storeErrStatus(err), "%v", err)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 		return
 	}
-	existing, err := s.store.GetAPIKey(r.Context(), id)
+	existing, err := s.team().GetAPIKey(r.Context(), id)
 	if err != nil {
 		writeErr(w, storeErrStatus(err), "%v", err)
 		return
@@ -765,7 +765,7 @@ func (s *Server) handleUpdateKey(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, "name is required")
 			return
 		}
-		taken, err := s.store.APIKeyNameTaken(r.Context(), name, id)
+		taken, err := s.team().APIKeyNameTaken(r.Context(), name, id)
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, "%v", err)
 			return
@@ -788,7 +788,7 @@ func (s *Server) handleUpdateKey(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "%s", msg)
 		return
 	}
-	key, err := s.store.UpdateAPIKey(r.Context(), id, name, enabled, policy)
+	key, err := s.team().UpdateAPIKey(r.Context(), id, name, enabled, policy)
 	if err != nil {
 		if isUniqueViolation(err) {
 			writeErr(w, http.StatusConflict, "a key named %q already exists; names are unique so the key list and the request log can tell two keys apart", name)
@@ -807,7 +807,7 @@ func (s *Server) handleDeleteKey(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid key id")
 		return
 	}
-	if err := s.store.DeleteAPIKey(r.Context(), id); err != nil {
+	if err := s.team().DeleteAPIKey(r.Context(), id); err != nil {
 		writeErr(w, storeErrStatus(err), "%v", err)
 		return
 	}
@@ -876,7 +876,7 @@ func (s *Server) registerChosenModels(ctx context.Context, providerID int64, cho
 	if len(models) == 0 {
 		return 0, nil
 	}
-	if _, err := s.store.SyncModels(ctx, providerID, models); err != nil {
+	if _, err := s.team().SyncModels(ctx, providerID, models); err != nil {
 		return 0, err
 	}
 	return len(models), nil

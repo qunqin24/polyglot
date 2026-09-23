@@ -14,11 +14,12 @@ import (
 
 func limitKey(t *testing.T, st *store.Store, policy store.APIKeyPolicy) {
 	t.Helper()
-	keys, err := st.ListAPIKeys(context.Background())
+	tm := st.ForTeam(store.DefaultTeamID)
+	keys, err := tm.ListAPIKeys(context.Background())
 	if err != nil || len(keys) != 1 {
 		t.Fatalf("list key: %v (%d keys)", err, len(keys))
 	}
-	if _, err := st.UpdateAPIKey(context.Background(), keys[0].ID, keys[0].Name, true, policy); err != nil {
+	if _, err := tm.UpdateAPIKey(context.Background(), keys[0].ID, keys[0].Name, true, policy); err != nil {
 		t.Fatalf("apply key policy: %v", err)
 	}
 }

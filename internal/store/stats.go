@@ -80,7 +80,7 @@ func bucketSeconds(window time.Duration) int64 {
 	}
 }
 
-func (s *Store) Stats(ctx context.Context, since time.Time) (*Stats, error) {
+func (t *Scope) Stats(ctx context.Context, since time.Time) (*Stats, error) {
 	from := since.UnixMilli()
 	bucket := bucketSeconds(time.Since(since))
 	// Start the slices empty rather than nil: a nil slice marshals to JSON
@@ -91,7 +91,7 @@ func (s *Store) Stats(ctx context.Context, since time.Time) (*Stats, error) {
 		BucketSeconds: bucket,
 	}
 
-	err := s.db.QueryRowContext(ctx, `SELECT
+	err := t.queryRow(ctx, `
 			COUNT(*),
 			COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END), 0),
@@ -104,8 +104,8 @@ func (s *Store) Stats(ctx context.Context, since time.Time) (*Stats, error) {
 			COALESCE(SUM(cost_usd), 0),
 			COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN upstream_protocol != '' AND upstream_protocol != client_protocol
-				THEN 1 ELSE 0 END), 0)
-		FROM request_logs WHERE started_at >= ?`, from).
+				THEN 1 ELSE 0 END), 0)`,
+		ownedRequestLogs, `AND started_at >= ?`, from).
 		Scan(&st.TotalRequests, &st.SuccessCount, &st.ErrorCount, &st.InputTokens, &st.OutputTokens,
 			&st.CachedInputTokens, &st.CacheWriteTokens, &st.ReasoningTokens,
 			&st.AvgLatencyMS, &st.CostUSD, &st.UnpricedRequests, &st.ConvertedRequests)
@@ -113,8 +113,8 @@ func (s *Store) Stats(ctx context.Context, since time.Time) (*Stats, error) {
 		return nil, fmt.Errorf("stats totals: %w", err)
 	}
 
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM request_logs
-		WHERE started_at >= ? AND fidelity_notes != ''
+	if err := t.queryRow(ctx, `COUNT(*)`, ownedRequestLogs,
+		`AND started_at >= ? AND fidelity_notes != ''
 		  AND EXISTS (SELECT 1 FROM json_each(`+validNotes+`) n
 		              WHERE n.value ->> 'fidelity' IN ('lossy', 'unsupported'))`, from).
 		Scan(&st.LossyRequests); err != nil {
@@ -126,16 +126,17 @@ func (s *Store) Stats(ctx context.Context, since time.Time) (*Stats, error) {
 		if offset >= st.TotalRequests {
 			offset = st.TotalRequests - 1
 		}
-		if err := s.db.QueryRowContext(ctx,
-			`SELECT latency_ms FROM request_logs WHERE started_at >= ? ORDER BY latency_ms LIMIT 1 OFFSET ?`,
+		if err := t.queryRow(ctx, `latency_ms`, ownedRequestLogs,
+			`AND started_at >= ? ORDER BY latency_ms LIMIT 1 OFFSET ?`,
 			from, offset).Scan(&st.P95LatencyMS); err != nil && err != sql.ErrNoRows {
 			return nil, fmt.Errorf("stats p95: %w", err)
 		}
 	}
 
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT provider_name, COUNT(*), SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END)
-		 FROM request_logs WHERE started_at >= ? AND provider_name != ''
+	rows, err := t.query(ctx,
+		`provider_name, COUNT(*), SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END)`,
+		ownedRequestLogs,
+		`AND started_at >= ? AND provider_name != ''
 		 GROUP BY provider_name ORDER BY COUNT(*) DESC LIMIT 10`, from)
 	if err != nil {
 		return nil, fmt.Errorf("stats by provider: %w", err)
@@ -152,12 +153,15 @@ func (s *Store) Stats(ctx context.Context, since time.Time) (*Stats, error) {
 		return nil, err
 	}
 
-	brows, err := s.db.QueryContext(ctx,
-		`SELECT (started_at / ?) * ? AS b, COUNT(*),
+	// The two bucket parameters sit in the column list, ahead of the WHERE the
+	// constructor writes, so they stay first in the argument list and the team
+	// id binds after them.
+	brows, err := t.query(ctx,
+		`(started_at / ?) * ? AS b, COUNT(*),
 		        SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END),
 		        COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
-		        COALESCE(SUM(cost_usd), 0), COALESCE(CAST(AVG(latency_ms) AS INTEGER), 0)
-		 FROM request_logs WHERE started_at >= ? GROUP BY b ORDER BY b`,
+		        COALESCE(SUM(cost_usd), 0), COALESCE(CAST(AVG(latency_ms) AS INTEGER), 0)`,
+		ownedRequestLogs, `AND started_at >= ? GROUP BY b ORDER BY b`,
 		bucket*1000, bucket, from)
 	if err != nil {
 		return nil, fmt.Errorf("stats series: %w", err)
@@ -237,7 +241,7 @@ type FidelityFieldCount struct {
 	Count    int64  `json:"count"`
 }
 
-func (s *Store) ConversionStats(ctx context.Context, since time.Time) (*ConversionStats, error) {
+func (t *Scope) ConversionStats(ctx context.Context, since time.Time) (*ConversionStats, error) {
 	from := since.UnixMilli()
 	cs := &ConversionStats{
 		Pairs:  []ConversionPair{},
@@ -245,26 +249,27 @@ func (s *Store) ConversionStats(ctx context.Context, since time.Time) (*Conversi
 		Fields: []FidelityFieldCount{},
 	}
 
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*),
+	if err := t.queryRow(ctx, `COUNT(*),
 			COALESCE(SUM(CASE WHEN upstream_protocol != '' AND upstream_protocol != client_protocol
-				THEN 1 ELSE 0 END), 0)
-		FROM request_logs WHERE started_at >= ?`, from).
+				THEN 1 ELSE 0 END), 0)`,
+		ownedRequestLogs, `AND started_at >= ?`, from).
 		Scan(&cs.TotalRequests, &cs.ConvertedRequests); err != nil {
 		return nil, fmt.Errorf("conversion totals: %w", err)
 	}
 
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM request_logs
-		WHERE started_at >= ? AND fidelity_notes != ''
+	if err := t.queryRow(ctx, `COUNT(*)`, ownedRequestLogs,
+		`AND started_at >= ? AND fidelity_notes != ''
 		  AND EXISTS (SELECT 1 FROM json_each(`+validNotes+`) n
 		              WHERE n.value ->> 'fidelity' IN ('lossy', 'unsupported'))`, from).
 		Scan(&cs.LossyRequests); err != nil {
 		return nil, fmt.Errorf("conversion lossy: %w", err)
 	}
 
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT client_protocol, upstream_protocol, COUNT(*),
-		        SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END)
-		 FROM request_logs WHERE started_at >= ? AND client_protocol != '' AND upstream_protocol != ''
+	rows, err := t.query(ctx,
+		`client_protocol, upstream_protocol, COUNT(*),
+		        SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END)`,
+		ownedRequestLogs,
+		`AND started_at >= ? AND client_protocol != '' AND upstream_protocol != ''
 		 GROUP BY client_protocol, upstream_protocol ORDER BY COUNT(*) DESC LIMIT 40`, from)
 	if err != nil {
 		return nil, fmt.Errorf("conversion pairs: %w", err)
@@ -281,9 +286,8 @@ func (s *Store) ConversionStats(ctx context.Context, since time.Time) (*Conversi
 		return nil, err
 	}
 
-	frows, err := s.db.QueryContext(ctx,
-		`SELECT client_protocol, provider_name, COUNT(*)
-		 FROM request_logs WHERE started_at >= ? AND client_protocol != '' AND provider_name != ''
+	frows, err := t.query(ctx, `client_protocol, provider_name, COUNT(*)`, ownedRequestLogs,
+		`AND started_at >= ? AND client_protocol != '' AND provider_name != ''
 		 GROUP BY client_protocol, provider_name ORDER BY COUNT(*) DESC LIMIT 24`, from)
 	if err != nil {
 		return nil, fmt.Errorf("conversion flows: %w", err)
@@ -302,12 +306,18 @@ func (s *Store) ConversionStats(ctx context.Context, since time.Time) (*Conversi
 
 	// One row per note, not per request: a request that lost two fields is two
 	// rows here, which is what "how often was this field a problem" means.
-	nrows, err := s.db.QueryContext(ctx,
+	//
+	// This is the one statement in this file the scoped constructors cannot
+	// build: its FROM joins request_logs to json_each, and a constructor owns
+	// its FROM precisely so that no caller can extend it. The predicate is
+	// therefore written by hand, qualified with the table because two of them
+	// are in scope here.
+	nrows, err := t.s.db.QueryContext(ctx,
 		`SELECT n.value ->> 'field', n.value ->> 'fidelity', COUNT(*)
 		 FROM request_logs, json_each(`+validNotes+`) n
-		 WHERE started_at >= ? AND fidelity_notes != ''
+		 WHERE request_logs.team_id = ? AND started_at >= ? AND fidelity_notes != ''
 		   AND n.value ->> 'field' != ''
-		 GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 24`, from)
+		 GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 24`, t.teamID, from)
 	if err != nil {
 		return nil, fmt.Errorf("conversion fields: %w", err)
 	}
@@ -359,7 +369,7 @@ type ErrorCount struct {
 	Count      int64  `json:"count"`
 }
 
-func (s *Store) LatencyStats(ctx context.Context, since time.Time) (*LatencyStats, error) {
+func (t *Scope) LatencyStats(ctx context.Context, since time.Time) (*LatencyStats, error) {
 	from := since.UnixMilli()
 	bucket := bucketSeconds(time.Since(since))
 	ls := &LatencyStats{
@@ -372,17 +382,22 @@ func (s *Store) LatencyStats(ctx context.Context, since time.Time) (*LatencyStat
 	// PERCENT_RANK gives the first row of each bucket a rank of 0, so the
 	// MAX(CASE ...) below always has at least one row to pick from and a
 	// percentile is never null where a request exists.
-	prows, err := s.db.QueryContext(ctx, `WITH b AS (
+	//
+	// The scoped constructors cannot build this one either: the predicate has to
+	// go inside the CTE, next to started_at, because the percentile ranks are
+	// computed there. Filtering the outer SELECT over b instead would rank one
+	// team's requests against every other team's and then show the survivors.
+	prows, err := t.s.db.QueryContext(ctx, `WITH b AS (
 			SELECT (started_at / ?) * ? AS start, latency_ms,
 			       PERCENT_RANK() OVER (PARTITION BY (started_at / ?) * ? ORDER BY latency_ms) AS pr
-			FROM request_logs WHERE started_at >= ?
+			FROM request_logs WHERE request_logs.team_id = ? AND started_at >= ?
 		)
 		SELECT start, COUNT(*),
 		       MAX(CASE WHEN pr <= 0.50 THEN latency_ms END),
 		       MAX(CASE WHEN pr <= 0.95 THEN latency_ms END),
 		       MAX(CASE WHEN pr <= 0.99 THEN latency_ms END)
 		FROM b GROUP BY start ORDER BY start`,
-		bucket*1000, bucket, bucket*1000, bucket, from)
+		bucket*1000, bucket, bucket*1000, bucket, t.teamID, from)
 	if err != nil {
 		return nil, fmt.Errorf("latency series: %w", err)
 	}
@@ -418,9 +433,10 @@ func (s *Store) LatencyStats(ctx context.Context, since time.Time) (*LatencyStat
 	}
 	expr += fmt.Sprintf(" ELSE %d END", len(latencyEdges))
 	args = append(args, from)
-	hrows, err := s.db.QueryContext(ctx,
-		`SELECT `+expr+` AS b, COUNT(*) FROM request_logs WHERE started_at >= ? GROUP BY b ORDER BY b`,
-		args...)
+	// One edge per placeholder, all of them in the column list, so the team id
+	// binds after them and the edges keep the order they were built in.
+	hrows, err := t.query(ctx, expr+` AS b, COUNT(*)`, ownedRequestLogs,
+		`AND started_at >= ? GROUP BY b ORDER BY b`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("latency histogram: %w", err)
 	}
@@ -447,9 +463,8 @@ func (s *Store) LatencyStats(ctx context.Context, since time.Time) (*LatencyStat
 		ls.Histogram = append(ls.Histogram, bar)
 	}
 
-	erows, err := s.db.QueryContext(ctx,
-		`SELECT status_code, error_type, COUNT(*) FROM request_logs
-		 WHERE started_at >= ? AND status != 'success'
+	erows, err := t.query(ctx, `status_code, error_type, COUNT(*)`, ownedRequestLogs,
+		`AND started_at >= ? AND status != 'success'
 		 GROUP BY status_code, error_type ORDER BY COUNT(*) DESC LIMIT 8`, from)
 	if err != nil {
 		return nil, fmt.Errorf("latency errors: %w", err)
@@ -509,7 +524,7 @@ type ModelCost struct {
 	Unpriced     int64   `json:"unpriced"`
 }
 
-func (s *Store) CostStats(ctx context.Context, since time.Time) (*CostStats, error) {
+func (t *Scope) CostStats(ctx context.Context, since time.Time) (*CostStats, error) {
 	from := since.UnixMilli()
 	bucket := bucketSeconds(time.Since(since))
 	cs := &CostStats{
@@ -519,22 +534,23 @@ func (s *Store) CostStats(ctx context.Context, since time.Time) (*CostStats, err
 		Models:        []ModelCost{},
 	}
 
-	if err := s.db.QueryRowContext(ctx, `SELECT
+	if err := t.queryRow(ctx, `
 			COALESCE(SUM(cost_usd), 0),
 			COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END), 0),
 			COALESCE(SUM(input_tokens), 0), COALESCE(SUM(cached_input_tokens), 0),
 			COALESCE(SUM(cache_write_tokens), 0), COALESCE(SUM(output_tokens), 0),
-			COALESCE(SUM(reasoning_tokens), 0)
-		FROM request_logs WHERE started_at >= ?`, from).
+			COALESCE(SUM(reasoning_tokens), 0)`,
+		ownedRequestLogs, `AND started_at >= ?`, from).
 		Scan(&cs.CostUSD, &cs.UnpricedRequests, &cs.InputTokens, &cs.CachedInputTokens,
 			&cs.CacheWriteTokens, &cs.OutputTokens, &cs.ReasoningTokens); err != nil {
 		return nil, fmt.Errorf("cost totals: %w", err)
 	}
 
-	mrows, err := s.db.QueryContext(ctx,
-		`SELECT provider_name, upstream_model, COALESCE(SUM(cost_usd), 0), COUNT(*),
-		        SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END)
-		 FROM request_logs WHERE started_at >= ? AND upstream_model != ''
+	mrows, err := t.query(ctx,
+		`provider_name, upstream_model, COALESCE(SUM(cost_usd), 0), COUNT(*),
+		        SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END)`,
+		ownedRequestLogs,
+		`AND started_at >= ? AND upstream_model != ''
 		 GROUP BY provider_name, upstream_model
 		 ORDER BY COALESCE(SUM(cost_usd), 0) DESC, COUNT(*) DESC LIMIT 16`, from)
 	if err != nil {
@@ -579,9 +595,9 @@ func (s *Store) CostStats(ctx context.Context, since time.Time) (*CostStats, err
 	other := CostStack{Points: make([]float64, len(cs.Starts))}
 	otherUsed := false
 
-	srows, err := s.db.QueryContext(ctx,
-		`SELECT (started_at / ?) * ?, provider_name, upstream_model, SUM(cost_usd)
-		 FROM request_logs WHERE started_at >= ? AND cost_usd IS NOT NULL
+	srows, err := t.query(ctx,
+		`(started_at / ?) * ?, provider_name, upstream_model, SUM(cost_usd)`,
+		ownedRequestLogs, `AND started_at >= ? AND cost_usd IS NOT NULL
 		 GROUP BY 1, 2, 3`, bucket*1000, bucket, from)
 	if err != nil {
 		return nil, fmt.Errorf("cost series: %w", err)

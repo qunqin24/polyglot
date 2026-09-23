@@ -52,7 +52,7 @@ type Server struct {
 
 func NewServer(st *store.Store, cfg *config.Config, log *slog.Logger, ul *usage.Logger,
 	tel *telemetry.Telemetry, prices *pricing.Resolver, setupGuard *setup.Guard) *Server {
-	rt := router.New(st, cfg.UpstreamTimeout)
+	rt := router.New(cfg.UpstreamTimeout)
 	client := provider.NewClient()
 	health := provider.NewHealth(cfg.ProviderCooldown)
 	var fetcher *media.Fetcher
@@ -92,6 +92,13 @@ func NewServer(st *store.Store, cfg *config.Config, log *slog.Logger, ul *usage.
 		},
 	}
 }
+
+// team is the scope every admin route operates on. There is no team API and no
+// team UI, so it is the one team every deployment has — and that is a decision
+// rather than an oversight: an admin route that quietly began serving a
+// different team would be a bug, not a feature. When teams become visible, this
+// is the single place that learns to read the administrator's team instead.
+func (s *Server) team() *store.Scope { return s.store.ForTeam(store.DefaultTeamID) }
 
 func (s *Server) Handler() http.Handler {
 	r := chi.NewRouter()
