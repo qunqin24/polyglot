@@ -36,7 +36,7 @@ func sampleRequest() *canonical.Request {
 			{Role: canonical.RoleUser, Content: []canonical.ContentPart{
 				canonical.Text("What is the weather in Paris?"),
 				// Inline base64 is the shape every protocol can express, so it
-				// must survive all sixteen pairings rather than merely be noted.
+				// must survive all twenty-five pairings rather than merely be noted.
 				canonical.ImagePart("image/png", "iVBORw0KGgo="),
 				canonical.FilePart("application/pdf", "report.pdf", "JVBERi0xLjQK"),
 			}},

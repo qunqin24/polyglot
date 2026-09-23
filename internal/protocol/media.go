@@ -8,13 +8,14 @@ import (
 
 // Shared multimodal plumbing.
 //
-// The four protocols disagree about how to spell an attachment but agree on
+// The five protocols disagree about how to spell an attachment but agree on
 // what one is, so the differences are small and mechanical:
 //
 //	OpenAI      image_url.url is a data: URI or an https URL
 //	Responses   input_image.image_url, same two shapes, or a file_id
 //	Anthropic   source is {base64, media_type, data} or {url} or {file}
 //	Gemini      inlineData{mimeType,data} or fileData{fileUri}
+//	Interactions an inline media block or a file block
 //
 // Two helpers cover the parts every codec would otherwise repeat.
 

@@ -54,11 +54,13 @@ Polyglot 走了一条不同的路。
 | **部署** | 单个静态二进制，内嵌 UI，SQLite | Python 进程 + 可选代理 | Go/Python + MySQL/PostgreSQL + Redis |
 | **运行时依赖** | 无 | Redis 可选，PostgreSQL 可选 | MySQL 或 PostgreSQL，Redis |
 | **遥测** | 零上报，只发到运营者自己的 OTLP | 默认匿名使用统计 | 无 |
-| **目标用户** | 个人运营者 | 团队和企业 | 做 API 转售的团队 |
+| **目标用户** | 个人运营者（团队隔离在计划中） | 团队和企业 | 做 API 转售的团队 |
 | **内置工具** | 从原始请求中读取——未来厂商新增的工具自动透传 | 固定列表 | 固定列表 |
 
-Polyglot 不是上述工具的超集。它没有计费、没有多租户、没有用户套餐、没有 RBAC
-——也永远不会有。它是一个为个人流量服务的协议转换网关，所有功能都围绕这个定位。
+Polyglot 不是上述工具的超集。它没有计费、没有用户套餐、没有 RBAC——也永远不会有。
+多租户是唯一的例外，而且切得很窄：团队是一个计划中的可选隔离层——同一个网关下各自
+的 provider、Key、账本和日志——一个人运行的部署从头到尾碰不到这个概念。它是一个协
+议转换网关，所有功能都围绕这个定位。
 
 ## 快速开始
 
@@ -425,7 +427,9 @@ Node.js。自动检测浏览器语言（中文和英文），也可在侧边栏�
 理）、成本、首 token 时间、每秒 token 数、调用地址、保真度说明。按以上全部字段
 加 `X-Title`、referer 和 user agent 过滤。
 
-**永远不存储 prompt 或补全内容。**
+**默认只记录元数据。** 在 **设置 → 内容日志** 中开启记录后，才会保留实际的
+prompt、工具调用/结果、回复和逐次尝试的线上报文，保留期 3、7（默认）或 30 天。
+可以为 agent 创建单独的只读日志 Key。详见[内容日志指南](docs/log-api.md)。
 
 ### 定价
 
@@ -601,7 +605,8 @@ curl http://localhost:3000/v1/chat/completions \
 - API Key：鉴权用 SHA-256 哈希，另存一份加密副本（与供应商凭据同一把锁），操作
   者可随时读回。
 - 错误路径：上游凭据在到达客户端或日志之前被抹掉。
-- 请求日志：只记录元数据。**不存储 prompt，不存储补全，不记录请求头。**
+- 请求日志：默认只记录元数据；可选择开启完整正文记录，保留期 3/7/30 天，外部访问
+  走单独的只读日志 Key。传输凭据被排除在外；对话正文按原样保留。详见[内容日志](docs/log-api.md)。
 - 管理会话：HttpOnly Cookie + 双提交 CSRF token。
 - 首次安装：一次性安装口令，并由数据库保证只能有一个管理员。
 - 上游存储：OpenAI Responses 和 Gemini Interactions 的 `store` 字段缺省为
@@ -621,8 +626,8 @@ docker compose exec polyglot polyglot reset-password
 
 ## 从源码构建
 
-需要 Go 1.26.6 和 Node 20+。pnpm 由 `web/package.json` 的 `packageManager` 锁
-定——`corepack` 会拉取正确的版本。
+需要 Go 1.25+（`go.mod` 声明的下限）和 Node 20+。pnpm 由 `web/package.json` 的
+`packageManager` 锁定——`corepack` 会拉取正确的版本。
 
 ```bash
 make build          # WebUI + 单个静态二进制 bin/polyglot
@@ -716,11 +721,15 @@ provider schema 和真实抓包。在这一点改变之前，请把它当作五�
 
 Polyglot 是一个协议转换网关，刻意**不做** API 转售平台。
 
-**不包含，不打算做：** 计费、充值、兑换码、推广返利、用户套餐、多租户、RBAC、
-图片/视频/音频生成、RAG、agent、MCP。不引入 Redis、PostgreSQL、Kafka、独立
-worker 或调度器。
+**不包含，不打算做：** 计费、充值、兑换码、推广返利、用户套餐、RBAC、图片/视频/
+音频生成、RAG、agent、MCP。不引入 Redis、PostgreSQL、Kafka、独立 worker 或调度
+器。
 
 显示一条请求花了多少钱不是计费。没有余额、没有配额、没有扣款、没有账单。
+
+团队是唯一计划中的例外，而且切得很窄：一个可选的隔离层，只回答"哪些资源属于谁"，
+除此之外什么都不回答。它不是组织架构、不是用户系统、不是 RBAC，也不会从它身上长出
+计费、套餐或 SSO。一个人运行的网关从头到尾不会学到"团队"这个词。
 
 服务端会话状态是设计上的边界。Polyglot 无状态，不保存任何历史轮次。Responses
 API 的 `store` 和 `previous_response_id` 报为不支持。会话归你的客户端管。
@@ -748,6 +757,12 @@ tests/compatibility/   官方 SDK 测试（独立 module）
 web/                   React 19 + Vite + Tailwind v4 + shadcn/ui
   src/lib/i18n/        带类型的翻译目录（en、zh）
 ```
+
+## 参与贡献
+
+改这个仓库之前先读 [AGENTS.md](AGENTS.md)——它是所有规则的唯一来源。任何改动在
+宣布完成之前必须通过 `make check`。提交遵循 Conventional Commits；Pull Request
+要说明行为变化和风险、列出跑过的命令，WebUI 的改动要附截图。
 
 ## 许可证
 

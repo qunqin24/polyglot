@@ -56,12 +56,15 @@ Polyglot takes a different approach.
 | **Deployment** | Single static binary, embedded UI, SQLite | Python process + optional proxy | Go/Python + MySQL/PostgreSQL + Redis |
 | **Runtime dependencies** | None | Redis optional, PostgreSQL optional | MySQL or PostgreSQL, Redis |
 | **Telemetry** | No usage telemetry; operator-only OTLP | Anonymous usage stats by default | None |
-| **Target user** | Individual operator | Teams and enterprises | Teams running API resale |
+| **Target user** | Individual operator (optional team isolation planned) | Teams and enterprises | Teams running API resale |
 | **Native tools** | Read from raw request — future vendor tools survive automatically | Fixed list | Fixed list |
 
-Polyglot is not a superset of these tools. It has no billing, no multi-tenancy,
-no user plans, no RBAC — and never will. It is a protocol conversion gateway for
-one person's traffic, and everything it does serves that scope.
+Polyglot is not a superset of these tools. It has no billing, no user plans and
+no RBAC — and never will. Multi-tenancy is the one exception, cut narrow: teams
+are planned as an optional isolation layer — separate providers, keys, ledgers
+and logs behind one gateway — and a deployment with one operator never meets the
+concept. It is a protocol conversion gateway, and everything it does serves that
+scope.
 
 ## Quick start
 
@@ -595,9 +598,9 @@ rewrite history. Cache portions are priced at the cache rate when available,
 with a fallback to the input rate (logged). Long-context tiers are applied
 automatically when the prompt exceeds the vendor's threshold.
 
-The catalog refresh is the only request Polyglot makes to an address you did
-not configure. It happens only when you press the button, and it sends nothing
-— it is a GET of a public file.
+The catalog refresh is a request to an address you did not configure — the
+second such request besides the optional update check above. It happens only
+when you press the button, and it sends nothing — it is a GET of a public file.
 
 ### Tracing
 
@@ -676,8 +679,8 @@ API keys keep working, and every admin session is invalidated.
 
 ## Build from source
 
-Requires Go 1.26.6 and Node 20+. pnpm is pinned by `packageManager` in
-`web/package.json` — `corepack` will fetch the right version.
+Requires Go 1.25+ (the floor `go.mod` declares) and Node 20+. pnpm is pinned by
+`packageManager` in `web/package.json` — `corepack` will fetch the right version.
 
 ```bash
 make build          # WebUI + single static binary at bin/polyglot
@@ -780,11 +783,16 @@ Polyglot is a protocol conversion gateway. It is deliberately **not** an API
 resale platform.
 
 **Not included, not planned:** billing, top-ups, redemption codes, referrals,
-user plans, multi-tenancy, RBAC, image/video/audio generation, RAG, agents,
-MCP. No Redis, no PostgreSQL, no Kafka, no workers, no schedulers.
+user plans, RBAC, image/video/audio generation, RAG, agents, MCP. No Redis, no
+PostgreSQL, no Kafka, no workers, no schedulers.
 
 Showing what a request cost is not billing. There is no balance, no quota, no
 deduction and no invoice.
+
+Teams are the one planned exception, and they stay narrow: an optional isolation
+layer that answers which resources belong to whom, and nothing else. Not an org
+chart, not a user system, not RBAC, and no billing, plans or SSO grow out of it.
+A gateway with one operator never learns the word.
 
 Server-side conversation state is out of scope by design. Polyglot is stateless
 and keeps no copy of earlier turns. The Responses API's `store` and
@@ -814,6 +822,14 @@ tests/compatibility/   official-SDK tests (separate module)
 web/                   React 19 + Vite + Tailwind v4 + shadcn/ui
   src/lib/i18n/        typed translation catalogs (en, zh)
 ```
+
+## Contributing
+
+The rules for touching this codebase live in [AGENTS.md](AGENTS.md) — read it
+before changing anything. Every change must pass `make check` before it is
+reported done. Commits follow Conventional Commits; pull requests state the
+behavior change and risk, list the commands run, and attach screenshots for
+WebUI changes.
 
 ## License
 
