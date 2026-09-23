@@ -7,11 +7,15 @@ FROM --platform=$BUILDPLATFORM node:22-alpine AS web
 # corepack ships with the image and pins the pnpm version from package.json.
 RUN corepack enable
 
-WORKDIR /web
+WORKDIR /src/web
 COPY web/package.json web/pnpm-lock.yaml web/pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 
 COPY web/ ./
+# The docs page imports repository Markdown and screenshots at build time.
+# Keep the same relative layout as local Vite builds.
+COPY README.md README.zh-CN.md AGENTS.md /src/
+COPY docs/ /src/docs/
 # vite build does not typecheck, so fail the image on a type or lint error
 # rather than shipping a broken bundle.
 RUN pnpm run typecheck && pnpm run lint && pnpm run build
@@ -26,7 +30,7 @@ RUN go mod download
 
 COPY . .
 # Overwrite the placeholder dist with the real bundle before go:embed runs.
-COPY --from=web /web/dist ./web/dist
+COPY --from=web /src/web/dist ./web/dist
 
 ARG VERSION=dev
 ARG COMMIT=unknown

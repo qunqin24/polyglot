@@ -9,4 +9,3 @@ web/dist
 *.db-wal
 *.db-shm
 secret.key
-README.md
