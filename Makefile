@@ -1,7 +1,7 @@
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 GOVULNCHECK_VERSION ?= v1.7.0
-GO_SECURITY_VERSION ?= go1.26.6
+GO_SECURITY_VERSION ?= go1.26.9
 LDFLAGS := -s -w \
 	-X github.com/qunqin24/polyglot/internal/version.Version=$(VERSION) \
 	-X github.com/qunqin24/polyglot/internal/version.Commit=$(COMMIT)
