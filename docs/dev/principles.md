@@ -23,7 +23,7 @@ Polyglot 是一个轻量的 LLM API 协议转换网关，默认一个人运行�
 | 打包 | WebUI 用 `go:embed` 嵌入；一个二进制、一个容器、一个进程 |
 | 包管理器 | pnpm，版本由 `web/package.json` 的 `packageManager` 钉住，交给 corepack |
 
-Go 版本以 `go.mod` 为准（`go 1.25.0`），Docker 构建用 `golang:1.26.10`（安全更新，见 `Makefile` 的 `GO_SECURITY_VERSION`）；Node 20+（Dockerfile 用 node 22）。
+Go 版本以 `go.mod` 为准（`go 1.25.0`），Docker 构建用 `golang:1.26.11`（安全更新，见 `Makefile` 的 `GO_SECURITY_VERSION`）；Node 20+（Dockerfile 用 node 22）。
 
 ## 非目标
 
