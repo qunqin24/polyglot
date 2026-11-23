@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"os"
+	"sync/atomic"
 	"time"
 )
 
@@ -17,8 +17,13 @@ type Client struct {
 	http *http.Client
 }
 
-var blockPrivate = os.Getenv("POLYGLOT_BLOCK_PRIVATE_UPSTREAM") == "true" ||
-	os.Getenv("BLOCK_PRIVATE_UPSTREAM") == "true"
+// blockPrivate is process-wide because the transport is: every dial reads it,
+// so a change in the WebUI applies to the next connection opened.
+var blockPrivate atomic.Bool
+
+// SetBlockPrivate turns the private-address guard on or off. Pooled
+// connections already open are not re-checked.
+func SetBlockPrivate(on bool) { blockPrivate.Store(on) }
 
 // NewClient builds the process-wide client. Timeout is applied per request via
 // context, not on the client, because streaming responses are long-lived.
@@ -51,11 +56,11 @@ func NewClient() *Client {
 
 // guardedDial optionally refuses connections to private ranges. It defaults to
 // permissive because running Polyglot in front of a local Ollama or vLLM is a
-// first-class use case; set BLOCK_PRIVATE_UPSTREAM=true when providers are
-// operator-untrusted.
+// first-class use case; turn on "block private upstreams" in the WebUI's
+// settings when providers are operator-untrusted.
 func guardedDial(d *net.Dialer) func(ctx context.Context, network, addr string) (net.Conn, error) {
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
-		if blockPrivate {
+		if blockPrivate.Load() {
 			host, _, err := net.SplitHostPort(addr)
 			if err != nil {
 				return nil, err

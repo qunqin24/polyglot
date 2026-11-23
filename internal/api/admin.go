@@ -149,7 +149,7 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	cookies, err := auth.NewSession(r.Context(), s.store, admin.ID, r.UserAgent(), s.cfg.SecureCookies)
+	cookies, err := auth.NewSession(r.Context(), s.store, admin.ID, r.UserAgent(), s.secureCookies(r))
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "%v", err)
 		return
@@ -174,7 +174,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cookies, err := auth.NewSession(r.Context(), s.store, admin.ID, r.UserAgent(), s.cfg.SecureCookies)
+	cookies, err := auth.NewSession(r.Context(), s.store, admin.ID, r.UserAgent(), s.secureCookies(r))
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "%v", err)
 		return
@@ -186,7 +186,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
-	for _, c := range auth.ClearSession(r.Context(), s.store, r, s.cfg.SecureCookies) {
+	for _, c := range auth.ClearSession(r.Context(), s.store, r, s.secureCookies(r)) {
 		http.SetCookie(w, c)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
@@ -199,9 +199,9 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		"created_at":       admin.CreatedAt,
 		"version":          version.Version,
 		"data_dir":         s.cfg.DataDir,
-		"log_retention":    s.cfg.LogRetentionDays,
+		"log_retention":    s.settings.Get().LogRetentionDays,
 		"dropped_logs":     s.usage.Dropped(),
-		"upstream_timeout": s.cfg.UpstreamTimeout.String(),
+		"upstream_timeout": s.settings.Get().UpstreamTimeout().String(),
 		"timezone":         s.timezone(r.Context()),
 	})
 }
@@ -262,7 +262,7 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.DeleteSessionsForAdmin(r.Context(), admin.ID); err != nil {
 		s.log.Error("clear sessions after password change", "error", err)
 	}
-	for _, c := range auth.ClearSession(r.Context(), s.store, r, s.cfg.SecureCookies) {
+	for _, c := range auth.ClearSession(r.Context(), s.store, r, s.secureCookies(r)) {
 		http.SetCookie(w, c)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})

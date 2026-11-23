@@ -76,7 +76,8 @@ func (g *Gateway) Live(w http.ResponseWriter, r *http.Request) {
 	defer conn.CloseNow()
 	rec.StatusCode = http.StatusSwitchingProtocols
 	tel.Streaming(true)
-	conn.SetReadLimit(g.Config.MaxRequestBytes)
+	maxRequest := g.Settings.Get().MaxRequestBytes()
+	conn.SetReadLimit(maxRequest)
 	firstCtx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	_, first, err := conn.Read(firstCtx)
 	cancel()
@@ -139,7 +140,7 @@ func (g *Gateway) Live(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, stop := context.WithCancel(r.Context())
 	result := make(chan liveResult, 2)
-	go func() { result <- forwardLive(ctx, conn, upstream, true, g.Config.MaxRequestBytes, clientDiag, nil) }()
+	go func() { result <- forwardLive(ctx, conn, upstream, true, maxRequest, clientDiag, nil) }()
 	go func() { result <- forwardLive(ctx, upstream, conn, false, g.Config.MaxUpstreamBytes, nil, tel) }()
 	firstResult := <-result
 	stop()

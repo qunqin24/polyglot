@@ -455,3 +455,85 @@ func TestAPrefixedModelIdStillFindsTheOfficialPrice(t *testing.T) {
 		t.Errorf("resolved %v from %q, want the official 3", got.Input, src)
 	}
 }
+
+// A resold model belongs to whoever made it, not whoever sells it: Alibaba
+// listing GLM says so with canonical_model_id, and that is what is recorded.
+// A first-party listing with no canonical id falls back to its own provider,
+// but only where nobody has stated otherwise.
+func TestMakersComeFromCanonicalIDs(t *testing.T) {
+	raw := []byte(`{
+		"alibaba": {"models": {
+			"qwen3-max": {"cost": {"input": 1, "output": 2}},
+			"glm-5.2": {"canonical_model_id": "zhipuai/glm-5.2"},
+			"kimi-k3": {}
+		}},
+		"anthropic": {"models": {
+			"claude-sonnet-4-6": {"cost": {"input": 3, "output": 15}},
+			"claude-sonnet-4-5": {"canonical_model_id": "anthropic/claude-sonnet-4-5"}
+		}},
+		"groq": {"models": {
+			"llama-3.1-8b-instant": {"canonical_model_id": "meta/llama-3.1-8b-instruct"},
+			"some-groq-thing": {}
+		}},
+		"openrouter": {"models": {
+			"moonshotai/kimi-k3": {"canonical_model_id": "moonshotai/kimi-k3"},
+			"qwen/qwen3-max": {"canonical_model_id": "alibaba/qwen3-max"}
+		}}
+	}`)
+	snap, err := Parse(raw, "test")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	want := map[string]string{
+		"qwen3-max":             "alibaba",
+		"glm-5.2":               "zhipuai",
+		"kimi-k3":               "moonshotai",
+		"claude-sonnet-4-6":     "anthropic",
+		"claude-sonnet-4-5":     "anthropic",
+		"llama-3.1-8b-instant":  "meta",
+		"llama-3.1-8b-instruct": "meta",
+	}
+	for id, maker := range want {
+		if got := snap.Makers[id]; got != maker {
+			t.Errorf("maker of %q = %q, want %q", id, got, maker)
+		}
+	}
+	if got, ok := snap.Makers["some-groq-thing"]; ok {
+		t.Errorf("groq is not a maker, yet some-groq-thing was given %q", got)
+	}
+}
+
+// A model is named the way its maker names it, not the way a reseller does,
+// and the name is tidied for display.
+func TestNamesComeFromTheMakersOwnListing(t *testing.T) {
+	raw := []byte(`{
+		"openai": {"models": {"gpt-5.5": {"name": "GPT-5.5", "cost": {"input": 5, "output": 30}}}},
+		"anthropic": {"models": {"claude-haiku-4-5": {"name": "Claude Haiku 4.5 (latest)", "cost": {"input": 1, "output": 5}}}},
+		"zhipuai": {"models": {"glm-5.2": {"name": "GLM-5.2", "canonical_model_id": "zhipuai/glm-5.2"}}},
+		"alibaba": {"models": {
+			"glm-5.2": {"name": "GLM 5.2 (Alibaba)", "canonical_model_id": "zhipuai/glm-5.2"}
+		}},
+		"siliconflow": {"models": {
+			"zai-org/GLM-5.2-FP8": {"name": "glm-5.2-fp8", "canonical_model_id": "zhipuai/glm-5.2"}
+		}},
+		"openrouter": {"models": {
+			"openai/gpt-5.5": {"name": "OpenAI: GPT-5.5", "canonical_model_id": "openai/gpt-5.5"},
+			"anthropic/claude-haiku-4.5": {"name": "Anthropic: Claude Haiku 4.5", "canonical_model_id": "anthropic/claude-haiku-4-5"}
+		}}
+	}`)
+	snap, err := Parse(raw, "test")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	want := map[string]string{
+		"gpt-5.5":          "GPT 5.5",
+		"claude-haiku-4-5": "Claude Haiku 4.5",
+		"glm-5.2":          "GLM 5.2",
+		"glm-5.2-fp8":      "GLM 5.2",
+	}
+	for id, name := range want {
+		if got := snap.Names[id]; got != name {
+			t.Errorf("name of %q = %q, want %q", id, got, name)
+		}
+	}
+}

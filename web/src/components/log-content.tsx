@@ -4,8 +4,11 @@ import { api, type ContentStage, type RequestLogDetail } from "@/lib/api";
 import { errorMessage, useAsync } from "@/lib/hooks";
 import { useT, type TFunction } from "@/lib/i18n";
 import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/input";
-import { ErrorBanner, Select, Spinner } from "@/components/ui/misc";
+import { Label } from "@/components/kit/input";
+import { ErrorBanner, Select } from "@/components/kit/misc";
+import { LoadingButton } from "@/components/kit/loading-button";
+import { ListRowsSkeleton, LoadingGate } from "@/components/kit/skeletons";
+import { useToast } from "@/components/kit/toast";
 
 function stageName(stage: ContentStage, t: TFunction) {
   const names: Record<string, string> = {
@@ -21,13 +24,18 @@ function stageName(stage: ContentStage, t: TFunction) {
 export function LogContent({ log }: { log: RequestLogDetail }) {
   const t = useT();
   const [opened, setOpened] = React.useState(false);
+  const { toast } = useToast();
   return <section className="flex flex-col gap-3">
     <h3 className="text-sm font-medium">{t("contentLogs.payloads")}</h3>
     {log.content_error && <ErrorBanner message={log.content_error} />}
     {!log.content_id ? <p className="text-sm text-muted-foreground">{t("contentLogs.notRecorded")}</p> : <>
       <div className="flex flex-wrap gap-2">
         <Button variant="outline" onClick={() => setOpened(!opened)}>{opened ? t("contentLogs.hide") : t("contentLogs.view")}</Button>
-        <Button variant="outline" onClick={() => window.location.assign(`/api/logs/${log.id}/export`)}><Download />{t("contentLogs.download")}</Button>
+        <Button variant="outline" onClick={() => {
+          // The browser owns the download and its progress; this only says it began.
+          window.location.assign(`/api/logs/${log.id}/export`);
+          toast(t("common.exportStarted"));
+        }}><Download />{t("contentLogs.download")}</Button>
       </div>
       {opened && <ContentStages id={log.id} />}
     </>}
@@ -36,11 +44,11 @@ export function LogContent({ log }: { log: RequestLogDetail }) {
 
 function ContentStages({ id }: { id: number }) {
   const t = useT();
-  const { data, error } = useAsync(() => api.logManifest(id), ["log-manifest", id]);
+  const { data, error, reload, loading } = useAsync(() => api.logManifest(id), ["log-manifest", id]);
   const [selected, setSelected] = React.useState("");
   const stage = data?.stages.find((s) => s.id === selected) ?? data?.stages[0];
-  if (error) return <ErrorBanner message={t("contentLogs.unavailable", { message: error })} />;
-  if (!data) return <Spinner />;
+  if (error && !data) return <ErrorBanner message={t("contentLogs.unavailable", { message: error })} onRetry={() => void reload()} retrying={loading} />;
+  if (!data) return <LoadingGate loading skeleton={<div className="min-h-32"><ListRowsSkeleton rows={3} /></div>}>{null}</LoadingGate>;
   return <div className="flex flex-col gap-3">
     {!data.complete && <ErrorBanner message={t("contentLogs.incomplete")} />}
     {stage && <>
@@ -93,8 +101,8 @@ function StageBody({ id, stage }: { id: number; stage: string }) {
   if (!more && text) { try { display = JSON.stringify(JSON.parse(text), null, 2); } catch { /* SSE and plain text are shown verbatim. */ } }
   return <div className="flex flex-col gap-2">
     {error && <ErrorBanner message={error} />}
-    <pre tabIndex={0} aria-label={t("contentLogs.payloads")} className="max-h-96 overflow-auto whitespace-pre-wrap break-all rounded-md border border-border bg-muted/30 p-3 font-mono text-xs leading-relaxed">{display || (busy ? t("contentLogs.loading") : t("contentLogs.empty"))}</pre>
-    {more && offset < 1_048_576 && <Button variant="outline" disabled={busy} onClick={() => void loadMore()}>{busy && <Spinner />}{t("contentLogs.loadMore")}</Button>}
+    <pre tabIndex={0} aria-busy={busy} aria-label={t("contentLogs.payloads")} className="min-h-24 max-h-96 overflow-auto whitespace-pre-wrap break-all rounded-md border border-border bg-muted/30 p-3 font-mono text-xs leading-relaxed">{display || (busy ? t("contentLogs.loading") : t("contentLogs.empty"))}</pre>
+    {more && offset < 1_048_576 && <LoadingButton variant="outline" busy={busy} onClick={() => void loadMore()}>{t("contentLogs.loadMore")}</LoadingButton>}
     {more && offset >= 1_048_576 && <p className="text-xs text-muted-foreground">{t("contentLogs.previewLimit")}</p>}
   </div>;
 }

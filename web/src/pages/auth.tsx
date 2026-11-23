@@ -1,12 +1,13 @@
 import * as React from "react";
-import { Link } from "react-router-dom";
+import { Link } from "@tanstack/react-router";
 import { api } from "@/lib/api";
 import { errorMessage } from "@/lib/hooks";
 import { useT } from "@/lib/i18n";
 import { browserTimeZone } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
-import { Input, Field } from "@/components/ui/input";
-import { ErrorBanner, Spinner } from "@/components/ui/misc";
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input, Field } from "@/components/kit/input";
+import { ErrorBanner } from "@/components/kit/misc";
+import { LoadingButton } from "@/components/kit/loading-button";
 import { Logo } from "@/components/logo";
 
 // First run creates the single local administrator; after that this is the
@@ -46,91 +47,91 @@ export function AuthPage({ mode, onDone }: { mode: "setup" | "login"; onDone: ()
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center px-4 py-10">
-      <div className="w-full max-w-sm">
-        <div className="mb-8 text-center">
-          <div className="mb-4 flex justify-center">
-            <Logo className="size-10 text-primary" />
-          </div>
-          <h1 className="text-2xl font-semibold tracking-tight">
-            {isSetup ? t("auth.setupTitle") : t("auth.loginTitle")}
-          </h1>
-          <p className="mt-1.5 text-sm text-muted-foreground">
-            {isSetup ? t("auth.setupSubtitle") : t("auth.loginSubtitle")}
-          </p>
+    <div className="container grid h-svh max-w-none items-center justify-center">
+      <div className="mx-auto flex w-full flex-col justify-center space-y-2 py-8 sm:w-[400px] sm:p-8">
+        <div className="mb-4 flex items-center justify-center">
+          <Logo className="me-2 size-6 text-primary" />
+          <h1 className="text-xl font-medium">Polyglot</h1>
         </div>
+        <Card className="gap-4">
+          <CardHeader>
+            <CardTitle className="text-lg tracking-tight">
+              {isSetup ? t("auth.setupTitle") : t("auth.loginTitle")}
+            </CardTitle>
+            <CardDescription>
+              {isSetup ? t("auth.setupSubtitle") : t("auth.loginSubtitle")}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={(e) => void submit(e)} className="space-y-4">
+              {isSetup && (
+                <Field label={t("auth.setupToken")} hint={t("auth.setupTokenHint")}>
+                  <Input
+                    type="password"
+                    value={setupToken}
+                    onChange={(e) => setSetupToken(e.target.value)}
+                    autoComplete="off"
+                    autoFocus
+                    required
+                  />
+                </Field>
+              )}
 
-        <form onSubmit={(e) => void submit(e)} className="space-y-4">
-          {isSetup && (
-            <Field label={t("auth.setupToken")} hint={t("auth.setupTokenHint")}>
-              <Input
-                type="password"
-                value={setupToken}
-                onChange={(e) => setSetupToken(e.target.value)}
-                autoComplete="off"
-                autoFocus
-                required
-              />
-            </Field>
-          )}
+              <Field label={t("auth.username")}>
+                <Input
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  autoComplete="username"
+                  autoFocus={!isSetup}
+                  required
+                />
+              </Field>
 
-          <Field label={t("auth.username")}>
-            <Input
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              autoComplete="username"
-              autoFocus={!isSetup}
-              required
-            />
-          </Field>
+              <Field label={t("auth.password")} hint={isSetup ? t("auth.passwordHint") : undefined}>
+                <Input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  autoComplete={isSetup ? "new-password" : "current-password"}
+                  required
+                  minLength={isSetup ? 8 : undefined}
+                />
+              </Field>
 
-          <Field label={t("auth.password")} hint={isSetup ? t("auth.passwordHint") : undefined}>
-            <Input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              autoComplete={isSetup ? "new-password" : "current-password"}
-              required
-              minLength={isSetup ? 8 : undefined}
-            />
-          </Field>
+              {isSetup && (
+                <Field label={t("auth.confirmPassword")}>
+                  <Input
+                    type="password"
+                    value={confirm}
+                    onChange={(e) => setConfirm(e.target.value)}
+                    autoComplete="new-password"
+                    required
+                  />
+                </Field>
+              )}
 
-          {isSetup && (
-            <Field label={t("auth.confirmPassword")}>
-              <Input
-                type="password"
-                value={confirm}
-                onChange={(e) => setConfirm(e.target.value)}
-                autoComplete="new-password"
-                required
-              />
-            </Field>
-          )}
+              {isSetup && (
+                <p className="text-xs text-muted-foreground">
+                  {t("auth.timezoneDetected", { timezone })}
+                </p>
+              )}
 
-          {isSetup && (
-            <p className="text-xs text-muted-foreground">
-              {t("auth.timezoneDetected", { timezone })}
-            </p>
-          )}
+              <ErrorBanner message={error} />
 
-          <ErrorBanner message={error} />
-
-          <Button type="submit" className="w-full" disabled={busy}>
-            {busy && <Spinner />}
-            {isSetup ? t("auth.createAdmin") : t("auth.signIn")}
-          </Button>
-        </form>
-
-        {isSetup && (
-          <p className="mt-6 text-center text-xs text-muted-foreground">
-            {t("auth.nextSteps")}
-          </p>
-        )}
-        <p className="mt-5 text-center text-sm">
-          <Link to="/docs" className="text-primary underline underline-offset-4 hover:text-accent-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring">
-            {t("auth.docsLink")}
-          </Link>
-        </p>
+              <LoadingButton type="submit" className="w-full" busy={busy}>
+                {isSetup ? t("auth.createAdmin") : t("auth.signIn")}
+              </LoadingButton>
+            </form>
+          </CardContent>
+          <CardFooter className="flex-col gap-3">
+            {isSetup && (
+              <p className="text-center text-xs text-muted-foreground">{t("auth.nextSteps")}</p>
+            )}
+            <Link to="/docs/$" params={{ _splat: "" }} className="text-sm text-muted-foreground underline underline-offset-4 hover:text-primary">
+              {t("auth.docsLink")}
+            </Link>
+          </CardFooter>
+        </Card>
       </div>
     </div>
   );

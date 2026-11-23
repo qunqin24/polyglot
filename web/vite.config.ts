@@ -1,11 +1,17 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import tailwindcss from "@tailwindcss/vite";
 import path from "node:path";
 
 // The build output goes straight into web/dist, where go:embed picks it up.
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [
+    // File-based routes in src/routes; regenerates src/routeTree.gen.ts.
+    tanstackRouter({ target: "react", autoCodeSplitting: true }),
+    react(),
+    tailwindcss(),
+  ],
   resolve: {
     alias: { "@": path.resolve(__dirname, "./src") },
   },

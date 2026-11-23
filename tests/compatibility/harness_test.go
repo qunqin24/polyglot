@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -36,7 +37,6 @@ const (
 	upResponses = "up-responses"
 	upAnthropic = "up-anthropic"
 	upGemini    = "up-gemini"
-	setupToken  = "compatibility-setup-token"
 )
 
 var gw *gateway
@@ -85,10 +85,10 @@ func run(m *testing.M) (int, error) {
 	base := fmt.Sprintf("http://127.0.0.1:%d", port)
 
 	proc := exec.Command(bin)
+	dataDir := filepath.Join(dir, "data")
 	proc.Env = append(os.Environ(),
-		fmt.Sprintf("PORT=%d", port),
-		"DATA_DIR="+filepath.Join(dir, "data"),
-		"POLYGLOT_SETUP_TOKEN="+setupToken,
+		fmt.Sprintf("LISTEN=127.0.0.1:%d", port),
+		"DATA_DIR="+dataDir,
 	)
 	proc.Stdout = io.Discard
 	proc.Stderr = os.Stderr
@@ -103,7 +103,13 @@ func run(m *testing.M) (int, error) {
 	if err := waitHealthy(base); err != nil {
 		return 0, err
 	}
-	key, err := seed(base, srv.URL)
+	// The first-run token is always generated into the data directory; read
+	// it the way an operator would.
+	token, err := os.ReadFile(filepath.Join(dataDir, "setup.token"))
+	if err != nil {
+		return 0, fmt.Errorf("read setup token: %w", err)
+	}
+	key, err := seed(base, srv.URL, strings.TrimSpace(string(token)))
 	if err != nil {
 		return 0, err
 	}
@@ -138,7 +144,7 @@ func waitHealthy(base string) error {
 
 // seed walks the same first-run flow an operator would: create the admin, log
 // in, register the upstreams, mint an API key.
-func seed(base, upstreamURL string) (string, error) {
+func seed(base, upstreamURL, setupToken string) (string, error) {
 	c := &adminClient{base: base, http: &http.Client{Timeout: 20 * time.Second}, setupToken: setupToken}
 
 	if err := c.do("POST", "/api/setup", map[string]any{

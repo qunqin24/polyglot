@@ -2,6 +2,7 @@ package provider
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -21,7 +22,8 @@ import (
 // about the last thirty seconds; carrying it across a restart would mean
 // starting up with opinions about a world that has moved on.
 type Health struct {
-	cooldown time.Duration
+	// cooldown is a time.Duration, atomic because the WebUI can change it.
+	cooldown atomic.Int64
 
 	mu    sync.Mutex
 	state map[int64]*providerHealth
@@ -45,10 +47,18 @@ const DefaultCooldown = 30 * time.Second
 const AuthStrikesBeforeDisable = 2
 
 func NewHealth(cooldown time.Duration) *Health {
-	if cooldown <= 0 {
-		cooldown = DefaultCooldown
+	h := &Health{state: map[int64]*providerHealth{}}
+	h.SetCooldown(cooldown)
+	return h
+}
+
+// SetCooldown changes how long the next failure benches a provider. A
+// provider already cooling keeps the deadline it was given.
+func (h *Health) SetCooldown(d time.Duration) {
+	if d <= 0 {
+		d = DefaultCooldown
 	}
-	return &Health{cooldown: cooldown, state: map[int64]*providerHealth{}}
+	h.cooldown.Store(int64(d))
 }
 
 // Available reports whether a provider may be tried now.
@@ -96,7 +106,7 @@ func (h *Health) Failed(id int64, authFailure bool) int {
 		st = &providerHealth{}
 		h.state[id] = st
 	}
-	st.coolingUntil = time.Now().Add(h.cooldown)
+	st.coolingUntil = time.Now().Add(time.Duration(h.cooldown.Load()))
 	if authFailure {
 		st.authStrikes++
 	} else {

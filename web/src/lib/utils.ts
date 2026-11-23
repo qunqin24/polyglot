@@ -130,3 +130,8 @@ export function formatRelative(
   }
   return formatDate(d);
 }
+
+/** Two-letter avatar text for a username. */
+export function initials(name: string): string {
+  return name.trim().slice(0, 2).toUpperCase() || "PG";
+}

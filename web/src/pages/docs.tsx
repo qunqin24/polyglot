@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Link, Navigate, NavLink, useLocation } from "react-router-dom";
+import { Link, Navigate, useLocation } from "@tanstack/react-router";
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ArrowUpRight, Languages } from "lucide-react";
@@ -16,13 +16,17 @@ import performance from "../../../docs/webui-performance.md?raw";
 
 type DocID = "overview" | "api" | "log-api" | "development" | "performance";
 
-const DOCUMENTS: { id: DocID; path: string; label: TranslationKey }[] = [
-  { id: "overview", path: "/docs", label: "docs.overview" },
-  { id: "api", path: "/docs/api", label: "docs.api" },
-  { id: "log-api", path: "/docs/log-api", label: "docs.logApi" },
-  { id: "development", path: "/docs/development", label: "docs.development" },
-  { id: "performance", path: "/docs/performance", label: "docs.performance" },
+const DOCUMENTS: { id: DocID; splat: string; label: TranslationKey }[] = [
+  { id: "overview", splat: "", label: "docs.overview" },
+  { id: "api", splat: "api", label: "docs.api" },
+  { id: "log-api", splat: "log-api", label: "docs.logApi" },
+  { id: "development", splat: "development", label: "docs.development" },
+  { id: "performance", splat: "performance", label: "docs.performance" },
 ];
+
+function docPath(splat: string): string {
+  return splat ? `/docs/${splat}` : "/docs";
+}
 
 const screenshots = import.meta.glob<string>("../../../docs/screenshots/*.png", {
   eager: true,
@@ -60,13 +64,13 @@ export default function DocsPage() {
   const { locale, setLocale, t } = useI18n();
   const location = useLocation();
   const path = location.pathname.replace(/\/$/, "") || "/docs";
-  const selected = DOCUMENTS.find((doc) => doc.path === path);
+  const selected = DOCUMENTS.find((doc) => docPath(doc.splat) === path);
 
   React.useEffect(() => {
     if (!location.hash) window.scrollTo(0, 0);
   }, [location.pathname, location.hash]);
 
-  if (!selected) return <Navigate to="/docs" replace />;
+  if (!selected) return <Navigate to="/docs/$" params={{ _splat: "" }} replace />;
 
   const body = docBody(selected.id, locale);
   const headings = [...body.matchAll(/^## (.+)$/gm)].map((match) => ({
@@ -83,20 +87,20 @@ export default function DocsPage() {
         return (
           <Link
             className="docs-text-link"
-            to="/docs"
+            to="/docs/$" params={{ _splat: "" }}
             onClick={() => setLocale(href.endsWith("README.md") ? "en" : "zh")}
           >{children}</Link>
         );
       }
       const internal: Record<string, string> = {
-        "docs/api.md": "/docs/api",
-        "docs/api.zh-CN.md": "/docs/api",
-        "log-api.md": "/docs/log-api",
-        "docs/log-api.md": "/docs/log-api",
-        "docs/webui-performance.md": "/docs/performance",
-        "AGENTS.md": "/docs/development",
+        "docs/api.md": "api",
+        "docs/api.zh-CN.md": "api",
+        "log-api.md": "log-api",
+        "docs/log-api.md": "log-api",
+        "docs/webui-performance.md": "performance",
+        "AGENTS.md": "development",
       };
-      if (href && internal[href]) return <Link className="docs-text-link" to={internal[href]}>{children}</Link>;
+      if (href && internal[href]) return <Link className="docs-text-link" to="/docs/$" params={{ _splat: internal[href] }}>{children}</Link>;
       if (href === "LICENSE") {
         return <a className="docs-text-link" href="https://github.com/qunqin24/polyglot/blob/main/LICENSE">{children}</a>;
       }
@@ -117,7 +121,7 @@ export default function DocsPage() {
     <div className="min-h-screen bg-background">
       <header className="sticky top-0 z-20 border-b border-border bg-background/95 backdrop-blur">
         <div className="mx-auto flex h-15 max-w-[94rem] items-center justify-between gap-4 px-5 sm:px-8">
-          <Link to="/docs" className="flex items-center gap-2.5 font-semibold tracking-tight text-foreground">
+          <Link to="/docs/$" params={{ _splat: "" }} className="flex items-center gap-2.5 font-semibold tracking-tight text-foreground">
             <Logo className="size-6 text-primary" />
             <span>Polyglot</span>
             <span className="ml-1 border-l border-border pl-3 text-sm font-normal text-muted-foreground">{t("docs.title")}</span>
@@ -142,17 +146,17 @@ export default function DocsPage() {
       <div className="mx-auto grid max-w-[94rem] grid-cols-[minmax(0,1fr)] gap-8 px-5 py-8 sm:px-8 lg:grid-cols-[12.5rem_minmax(0,1fr)] lg:gap-12 xl:grid-cols-[12.5rem_minmax(0,1fr)_12rem]">
         <nav aria-label={t("docs.title")} className="flex min-w-0 gap-1 overflow-x-auto border-b border-border pb-4 lg:sticky lg:top-23 lg:h-fit lg:flex-col lg:overflow-visible lg:border-b-0 lg:pb-0">
           {DOCUMENTS.map((doc) => (
-            <NavLink
+            <Link
               key={doc.id}
-              to={doc.path}
-              end
-              className={({ isActive }) => cn(
+              to="/docs/$"
+              params={{ _splat: doc.splat }}
+              className={cn(
                 "whitespace-nowrap rounded-md px-3 py-2 text-sm transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
-                isActive ? "bg-accent font-medium text-accent-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                doc.id === selected.id ? "bg-accent font-medium text-accent-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground",
               )}
             >
               {t(doc.label)}
-            </NavLink>
+            </Link>
           ))}
         </nav>
 

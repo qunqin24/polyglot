@@ -23,10 +23,14 @@ type Provider struct {
 	Name     string `json:"name"`
 	Protocol string `json:"protocol"`
 	BaseURL  string `json:"base_url"`
+	// Vendor names a built-in multi-protocol upstream such as "opencode-go".
+	// Empty for an ordinary provider. When set, each model picks its own
+	// protocol (see Model.ProtocolOverride) and BaseURL is display only.
+	Vendor string `json:"vendor"`
 	// Note is the operator's own description of this provider. Metadata only:
 	// nothing in the request path, the router or pricing reads it.
 	Note        string            `json:"note"`
-	APIKey      string            `json:"-"` // never serialised to the WebUI
+	APIKey      string            `json:"-"` // not in list/get JSON; only the secret endpoint returns it
 	HasAPIKey   bool              `json:"has_api_key"`
 	Headers     map[string]string `json:"headers"`
 	TimeoutSecs int               `json:"timeout_secs"`
@@ -65,22 +69,26 @@ type Provider struct {
 // use a stable name like "coding" while an operator repoints it at a different
 // provider or model. Calling a real upstream model id never needs one.
 type ModelAlias struct {
-	ID            int64     `json:"id"`
-	Alias         string    `json:"alias"`
-	ProviderID    int64     `json:"provider_id"`
-	ProviderName  string    `json:"provider_name,omitempty"`
-	Protocol      string    `json:"protocol,omitempty"`
-	UpstreamModel string    `json:"upstream_model"`
-	Priority      int       `json:"priority"`
-	Enabled       bool      `json:"enabled"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID           int64  `json:"id"`
+	Alias        string `json:"alias"`
+	ProviderID   int64  `json:"provider_id"`
+	ProviderName string `json:"provider_name,omitempty"`
+	Protocol     string `json:"protocol,omitempty"`
+	// ProtocolOverride is the protocol of the registry model this alias
+	// points at, when that model has one of its own. Protocol already
+	// reflects it; the router needs to know which of the two it is.
+	ProtocolOverride string    `json:"-"`
+	UpstreamModel    string    `json:"upstream_model"`
+	Priority         int       `json:"priority"`
+	Enabled          bool      `json:"enabled"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 const providerCols = `p.id, p.team_id, p.name, p.protocol, p.base_url, p.note, p.api_key_enc, p.headers,
 	p.timeout_secs, p.enabled, p.priority, p.strict_fields, p.auto_disable_on_auth_error,
 	p.disabled_reason, p.disabled_at, p.models_synced_at,
-	p.created_at, p.updated_at`
+	p.created_at, p.updated_at, p.vendor`
 
 // scanProvider stays on *Store because it needs the cipher, not the team: the
 // row it is handed has already been through a scoped query. Scoped callers
@@ -100,7 +108,7 @@ func (s *Store) scanProvider(sc interface{ Scan(...any) error }) (*Provider, err
 	)
 	if err := sc.Scan(&p.ID, &p.TeamID, &p.Name, &p.Protocol, &p.BaseURL, &p.Note, &keyEnc, &headers,
 		&p.TimeoutSecs, &enabled, &p.Priority, &strict, &autoOff, &p.DisabledReason, &disabledAt, &syncedAt,
-		&created, &updated); err != nil {
+		&created, &updated, &p.Vendor); err != nil {
 		return nil, err
 	}
 	p.StrictFields = strict != 0
@@ -197,10 +205,10 @@ func (t *Scope) CreateProvider(ctx context.Context, p *Provider) (*Provider, err
 	now := time.Now().Unix()
 	res, err := t.s.db.ExecContext(ctx,
 		`INSERT INTO providers (team_id, name, protocol, base_url, note, api_key_enc, headers, timeout_secs, enabled, priority,
-			strict_fields, auto_disable_on_auth_error, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			strict_fields, auto_disable_on_auth_error, vendor, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		t.teamID, p.Name, p.Protocol, p.BaseURL, p.Note, enc, string(headers), p.TimeoutSecs, boolInt(p.Enabled), p.Priority,
-		boolInt(p.StrictFields), boolInt(p.AutoDisableOnAuthError), now, now)
+		boolInt(p.StrictFields), boolInt(p.AutoDisableOnAuthError), p.Vendor, now, now)
 	if err != nil {
 		return nil, fmt.Errorf("create provider %q: %w", p.Name, err)
 	}
@@ -223,12 +231,12 @@ func (t *Scope) UpdateProvider(ctx context.Context, id int64, p *Provider, apiKe
 			return nil, err
 		}
 		_, err = t.exec(ctx,
-			`UPDATE SET name=?, protocol=?, base_url=?, note=?, api_key_enc=?, headers=?, timeout_secs=?,
+			`UPDATE SET name=?, protocol=?, vendor=?, base_url=?, note=?, api_key_enc=?, headers=?, timeout_secs=?,
 				enabled=?, priority=?, strict_fields=?, auto_disable_on_auth_error=?,
 				disabled_reason=CASE WHEN ?=1 THEN '' ELSE disabled_reason END,
 				disabled_at=CASE WHEN ?=1 THEN NULL ELSE disabled_at END,
 				updated_at=?`, ownedProviders, `AND id=?`,
-			p.Name, p.Protocol, p.BaseURL, p.Note, enc, string(headers), p.TimeoutSecs, boolInt(p.Enabled), p.Priority,
+			p.Name, p.Protocol, p.Vendor, p.BaseURL, p.Note, enc, string(headers), p.TimeoutSecs, boolInt(p.Enabled), p.Priority,
 			boolInt(p.StrictFields), boolInt(p.AutoDisableOnAuthError),
 			boolInt(p.Enabled), boolInt(p.Enabled), now, id)
 		if err != nil {
@@ -236,12 +244,12 @@ func (t *Scope) UpdateProvider(ctx context.Context, id int64, p *Provider, apiKe
 		}
 	} else {
 		_, err = t.exec(ctx,
-			`UPDATE SET name=?, protocol=?, base_url=?, note=?, headers=?, timeout_secs=?,
+			`UPDATE SET name=?, protocol=?, vendor=?, base_url=?, note=?, headers=?, timeout_secs=?,
 				enabled=?, priority=?, strict_fields=?, auto_disable_on_auth_error=?,
 				disabled_reason=CASE WHEN ?=1 THEN '' ELSE disabled_reason END,
 				disabled_at=CASE WHEN ?=1 THEN NULL ELSE disabled_at END,
 				updated_at=?`, ownedProviders, `AND id=?`,
-			p.Name, p.Protocol, p.BaseURL, p.Note, string(headers), p.TimeoutSecs, boolInt(p.Enabled), p.Priority,
+			p.Name, p.Protocol, p.Vendor, p.BaseURL, p.Note, string(headers), p.TimeoutSecs, boolInt(p.Enabled), p.Priority,
 			boolInt(p.StrictFields), boolInt(p.AutoDisableOnAuthError),
 			boolInt(p.Enabled), boolInt(p.Enabled), now, id)
 		if err != nil {
@@ -262,7 +270,13 @@ func (t *Scope) DeleteProvider(ctx context.Context, id int64) error {
 	return nil
 }
 
-const aliasCols = `a.id, a.alias, a.provider_id, p.name, p.protocol, a.upstream_model, a.priority, a.enabled, a.created_at, a.updated_at`
+// The last column is the protocol of the registry model the alias points at
+// (” when there is none or it has no override). An alias with no upstream
+// model name forwards its own name, so that is the name looked up then.
+const aliasCols = `a.id, a.alias, a.provider_id, p.name, p.protocol, a.upstream_model, a.priority, a.enabled, a.created_at, a.updated_at,
+	COALESCE((SELECT mm.protocol FROM models mm
+		WHERE mm.provider_id = a.provider_id
+		  AND mm.upstream_model_id = COALESCE(NULLIF(a.upstream_model, ''), a.alias)), '')`
 
 func scanAlias(sc interface{ Scan(...any) error }) (*ModelAlias, error) {
 	var (
@@ -272,8 +286,11 @@ func scanAlias(sc interface{ Scan(...any) error }) (*ModelAlias, error) {
 		updated int64
 	)
 	if err := sc.Scan(&m.ID, &m.Alias, &m.ProviderID, &m.ProviderName, &m.Protocol,
-		&m.UpstreamModel, &m.Priority, &enabled, &created, &updated); err != nil {
+		&m.UpstreamModel, &m.Priority, &enabled, &created, &updated, &m.ProtocolOverride); err != nil {
 		return nil, err
+	}
+	if m.ProtocolOverride != "" {
+		m.Protocol = m.ProtocolOverride
 	}
 	m.Enabled = enabled != 0
 	m.CreatedAt = time.Unix(created, 0)

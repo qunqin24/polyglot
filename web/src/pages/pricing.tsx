@@ -8,26 +8,24 @@ import {
   type PricedModel,
   type Provider,
 } from "@/lib/api";
-import { errorMessage, useAsync } from "@/lib/hooks";
+import { errorMessage, isAbort, useAsync, useCancellable, useSlowHint } from "@/lib/hooks";
 import { useT, type TFunction } from "@/lib/i18n";
-import { formatNumber, formatPrice, formatRelative } from "@/lib/utils";
-import { PageHeader } from "@/components/layout";
+import { cn, formatNumber, formatPrice, formatRelative } from "@/lib/utils";
+import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Dialog } from "@/components/ui/dialog";
-import { Field, Input } from "@/components/ui/input";
+import { Dialog } from "@/components/kit/dialog";
+import { LoadingButton } from "@/components/kit/loading-button";
+import { CardGridSkeleton, LoadingGate, SkeletonLine } from "@/components/kit/skeletons";
+import { Field, Input } from "@/components/kit/input";
 import {
   Badge,
   EmptyState,
   ErrorBanner,
   Select,
-  Spinner,
-  Table,
-  Td,
-  Th,
-  Tr,
-} from "@/components/ui/misc";
-import { useToast } from "@/components/ui/toast";
+} from "@/components/kit/misc";
+import { ModelIcon } from "@/components/model-icon";
+import { useToast } from "@/components/kit/toast";
 
 // The Pricing page answers what every model costs and which ones nobody knows
 // the price of. It is cost visibility, not billing: nothing here charges
@@ -48,31 +46,39 @@ export function Pricing() {
   const [search, setSearch] = React.useState("");
   const [editing, setEditing] = React.useState<PricedModel | null>(null);
   const [refreshing, setRefreshing] = React.useState(false);
+  const [refreshError, setRefreshError] = React.useState("");
+  const refreshCall = useCancellable();
+  const refreshSlow = useSlowHint(refreshing);
 
   React.useEffect(() => {
     const id = setTimeout(() => setSearch(searchInput.trim()), 300);
     return () => clearTimeout(id);
   }, [searchInput]);
 
-  const { data, loading, error, reload } = useAsync(
+  const { data, initialLoading, refreshing: reloading, error, reload } = useAsync(
     () => api.pricing({ provider_id: providerID, search, filter }),
     ["pricing", providerID, search, filter],
+    { keepPrevious: true },
   );
 
   async function refreshCatalog() {
     setRefreshing(true);
+    setRefreshError("");
+    const signal = refreshCall.start();
     try {
-      const res = await api.refreshCatalog();
+      const res = await api.refreshCatalog(signal);
       // A failed refresh is information, not an error to fix: the catalog
-      // already loaded stays in place and prices keep resolving.
+      // already loaded stays in place and prices keep resolving. It is said
+      // here, beside the catalog line, and stays until the next try.
       if (!res.ok) {
-        toast(t("pricing.refreshFailed", { error: res.error ?? "" }), "error");
+        setRefreshError(t("pricing.refreshFailed", { error: res.error ?? "" }));
       } else {
         toast(t("pricing.refreshed", { models: String(res.catalog?.models ?? 0) }));
-        reload();
+        void reload();
       }
     } catch (e) {
-      toast(errorMessage(e), "error");
+      if (isAbort(e)) toast(t("pricing.refreshCancelled"));
+      else setRefreshError(errorMessage(e));
     } finally {
       setRefreshing(false);
     }
@@ -87,14 +93,28 @@ export function Pricing() {
         title={t("pricing.title")}
         description={t("pricing.description")}
         action={
-          <Button variant="outline" onClick={() => void refreshCatalog()} disabled={refreshing}>
-            {refreshing ? <Spinner className="size-4" /> : <RefreshCw />}
+          <LoadingButton
+            variant="outline"
+            busy={refreshing}
+            icon={<RefreshCw />}
+            iconIsAction
+            onClick={() => void refreshCatalog()}
+          >
             {t("pricing.refresh")}
-          </Button>
+          </LoadingButton>
         }
       />
 
-      <CatalogLine status={data?.catalog ?? null} unpriced={data?.unpriced ?? 0} t={t} />
+      <CatalogLine
+        status={data?.catalog ?? null}
+        unpriced={data?.unpriced ?? 0}
+        loading={initialLoading}
+        refreshing={refreshing}
+        slow={refreshSlow}
+        onCancel={refreshCall.cancel}
+        t={t}
+      />
+      <ErrorBanner message={refreshError} onRetry={() => void refreshCatalog()} retrying={refreshing} />
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <Input
@@ -137,64 +157,33 @@ export function Pricing() {
         </div>
       </div>
 
-      <ErrorBanner message={error} />
+      <ErrorBanner message={error} onRetry={() => void reload()} />
 
-      <Card>
-        <CardContent className="p-0">
-          {loading && !data ? (
-            <div className="flex justify-center py-12">
-              <Spinner className="text-muted-foreground" />
-            </div>
-          ) : models.length === 0 ? (
+      <LoadingGate loading={initialLoading} skeleton={<CardGridSkeleton count={8} metrics={4} />}>
+      {models.length === 0 ? (
+        <Card>
+          <CardContent className="p-0">
             <EmptyState
               icon={CircleDollarSign}
               title={filtered ? t("pricing.emptyFiltered") : t("pricing.empty")}
               description={filtered ? t("pricing.emptyFilteredHint") : t("pricing.emptyHint")}
             />
-          ) : (
-            <Table>
-              <thead>
-                <Tr>
-                  <Th className="pl-5">{t("models.modelID")}</Th>
-                  <Th>{t("common.provider")}</Th>
-                  <Th className="text-right">{t("pricing.input")}</Th>
-                  <Th className="text-right">{t("pricing.output")}</Th>
-                  <Th className="hidden text-right sm:table-cell">{t("pricing.cacheRead")}</Th>
-                  <Th className="hidden text-right sm:table-cell">{t("pricing.cacheWrite")}</Th>
-                  <Th>{t("pricing.source")}</Th>
-                  <Th className="pr-5" />
-                </Tr>
-              </thead>
-              <tbody>
-                {models.map((m) => (
-                  <Tr key={m.id}>
-                    <Td className="pl-5">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-mono text-xs font-medium">{m.upstream_model_id}</span>
-                        <TierBadge tier={m.effective.tier} t={t} />
-                      </div>
-                    </Td>
-                    <Td className="text-sm">{m.provider_name}</Td>
-                    <Cell value={m.effective.input} />
-                    <Cell value={m.effective.output} />
-                    <Cell value={m.effective.cache_read} className="hidden sm:table-cell" />
-                    <Cell value={m.effective.cache_write} className="hidden sm:table-cell" />
-                    <Td>
-                      <SourceBadge source={m.source} t={t} />
-                    </Td>
-                    <Td className="pr-5 text-right">
-                      <Button variant="ghost" size="icon-sm" onClick={() => setEditing(m)}>
-                        <Pencil />
-                        <span className="sr-only">{t("common.edit")}</span>
-                      </Button>
-                    </Td>
-                  </Tr>
-                ))}
-              </tbody>
-            </Table>
+          </CardContent>
+        </Card>
+      ) : (
+        <div
+          aria-busy={reloading || undefined}
+          className={cn(
+            "grid gap-4 transition-opacity duration-200 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4",
+            reloading && "opacity-60",
           )}
-        </CardContent>
-      </Card>
+        >
+          {models.map((m) => (
+            <PriceCard key={m.id} model={m} onEdit={() => setEditing(m)} t={t} />
+          ))}
+        </div>
+      )}
+      </LoadingGate>
 
       {editing && (
         <PriceDialog
@@ -202,7 +191,7 @@ export function Pricing() {
           onClose={() => setEditing(null)}
           onSaved={() => {
             setEditing(null);
-            reload();
+            void reload();
           }}
         />
       )}
@@ -217,16 +206,30 @@ export function Pricing() {
 function CatalogLine({
   status,
   unpriced,
+  loading,
+  refreshing,
+  slow,
+  onCancel,
   t,
 }: {
   status: CatalogStatus | null;
   unpriced: number;
+  loading: boolean;
+  refreshing: boolean;
+  slow: boolean;
+  onCancel: () => void;
   t: TFunction;
 }) {
   return (
-    <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+    <div className="mb-4 flex min-h-5 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground" aria-live="polite">
       <span>
-        {status
+        {loading ? (
+          <SkeletonLine className="inline-block w-56 align-middle" />
+        ) : refreshing ? (
+          slow
+            ? t("pricing.refreshingSlow")
+            : t("pricing.refreshing")
+        ) : status
           ? t("pricing.catalogLine", {
               version: status.version,
               models: String(status.models),
@@ -240,6 +243,11 @@ function CatalogLine({
             })
           : t("pricing.catalogNone")}
       </span>
+      {refreshing && (
+        <button type="button" onClick={onCancel} className="underline underline-offset-2 hover:text-foreground">
+          {t("common.cancel")}
+        </button>
+      )}
       {unpriced > 0 && (
         <Badge variant="warning">{t("pricing.unpricedCount", { count: String(unpriced) })}</Badge>
       )}
@@ -247,36 +255,92 @@ function CatalogLine({
   );
 }
 
-// The columns show what a normal prompt costs. A model whose vendor charges
-// more for a long context says so here rather than in a sixth and seventh
-// column that would be blank on 90% of the rows.
+// One card per model. The four numbers show what a normal prompt costs. A
+// model whose vendor charges more for a long context says so in a line under
+// them rather than in extra cells that would be blank on 90% of the cards.
+function PriceCard({
+  model: m,
+  onEdit,
+  t,
+}: {
+  model: PricedModel;
+  onEdit: () => void;
+  t: TFunction;
+}) {
+  return (
+    <div className="flex flex-col rounded-xl border bg-card p-4 text-card-foreground shadow-xs transition-colors hover:border-foreground/20">
+      <div className="flex items-start gap-3">
+        <ModelIcon id={m.upstream_model_id} maker={m.maker} />
+        <div className="min-w-0 flex-1">
+          <p className="font-mono text-sm leading-5 font-medium break-all">{m.upstream_model_id}</p>
+          <p className="mt-0.5 truncate text-xs text-muted-foreground" title={m.provider_name}>
+            {m.provider_name}
+          </p>
+        </div>
+        <Button variant="ghost" size="icon-sm" onClick={onEdit} className="-mt-1 -mr-1">
+          <Pencil />
+          <span className="sr-only">{t("common.edit")}</span>
+        </Button>
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-center gap-1.5">
+        <SourceBadge source={m.source} t={t} />
+        <TierBadge tier={m.effective.tier} t={t} />
+      </div>
+
+      <dl className="mt-4 grid grid-cols-2 gap-x-3 gap-y-3 border-t pt-3">
+        <Metric label={t("pricing.input")} value={m.effective.input} />
+        <Metric label={t("pricing.output")} value={m.effective.output} />
+        <Metric label={t("pricing.cacheRead")} value={m.effective.cache_read} />
+        <Metric label={t("pricing.cacheWrite")} value={m.effective.cache_write} />
+      </dl>
+
+      {m.effective.tier && <TierLine tier={m.effective.tier} t={t} />}
+    </div>
+  );
+}
+
 function TierBadge({ tier, t }: { tier?: PriceTier; t: TFunction }) {
   if (!tier) return null;
-  const show = (v: number | null) => (v === null ? "—" : formatPrice(v));
   return (
-    <span
-      title={t("pricing.tierHint", {
-        tokens: formatNumber(tier.above_tokens),
-        input: show(tier.input),
-        output: show(tier.output),
-      })}
-    >
+    <span title={tierHint(tier, t)}>
       <Badge variant="accent">{t("pricing.tier")}</Badge>
     </span>
   );
 }
 
-// A dash, never a zero. A zero is a claim that the model is free, and a model
-// nobody has a price for is not a free one.
-function Cell({ value, className }: { value: number | null; className?: string }) {
+function tierHint(tier: PriceTier, t: TFunction): string {
+  const show = (v: number | null) => (v === null ? "—" : formatPrice(v));
+  return t("pricing.tierHint", {
+    tokens: formatNumber(tier.above_tokens),
+    input: show(tier.input),
+    output: show(tier.output),
+  });
+}
+
+// The long-context tier, spelled out on the card as well as in the badge's
+// tooltip, so the extra charge is visible without hovering.
+function TierLine({ tier, t }: { tier: PriceTier; t: TFunction }) {
   return (
-    <Td className={`text-right tabular-nums ${className ?? ""}`}>
-      {value === null ? (
-        <span className="text-muted-foreground">—</span>
-      ) : (
-        formatPrice(value)
-      )}
-    </Td>
+    <p className="mt-auto pt-3 text-xs text-muted-foreground">{tierHint(tier, t)}</p>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: number | null }) {
+  return (
+    <div className="min-w-0">
+      <dt className="truncate text-[11px] text-muted-foreground">{label}</dt>
+      {/* A dash, never a zero. A zero is a claim that the model is free, and a
+          model nobody has a price for is not a free one. */}
+      <dd
+        className={cn(
+          "mt-0.5 truncate text-sm font-medium tabular-nums",
+          value === null && "text-muted-foreground",
+        )}
+      >
+        {value === null ? "—" : formatPrice(value)}
+      </dd>
+    </div>
   );
 }
 
@@ -309,11 +373,11 @@ function PriceDialog({
     cache_read: numberField(model.price.cache_read),
     cache_write: numberField(model.price.cache_write),
   });
-  const [saving, setSaving] = React.useState(false);
+  const [saving, setSaving] = React.useState<"save" | "clear" | null>(null);
   const [invalid, setInvalid] = React.useState(false);
 
-  async function save(price: Price) {
-    setSaving(true);
+  async function save(price: Price, action: "save" | "clear") {
+    setSaving(action);
     try {
       await api.setModelPrice(model.id, price);
       toast(t("pricing.saved", { model: model.upstream_model_id }));
@@ -321,7 +385,7 @@ function PriceDialog({
     } catch (e) {
       toast(errorMessage(e), "error");
     } finally {
-      setSaving(false);
+      setSaving(null);
     }
   }
 
@@ -331,7 +395,7 @@ function PriceDialog({
       setInvalid(true);
       return;
     }
-    void save(price);
+    void save(price, "save");
   }
 
   const fields: { key: keyof typeof form; label: string }[] = [
@@ -351,21 +415,22 @@ function PriceDialog({
       }
       footer={
         <>
-          <Button
+          <LoadingButton
             variant="ghost"
-            disabled={saving}
+            busy={saving === "clear"}
+            disabled={saving === "save"}
             onClick={() =>
-              void save({ input: null, output: null, cache_read: null, cache_write: null })
+              void save({ input: null, output: null, cache_read: null, cache_write: null }, "clear")
             }
           >
             {t("pricing.clear")}
-          </Button>
-          <Button variant="outline" onClick={onClose} disabled={saving}>
+          </LoadingButton>
+          <Button variant="outline" onClick={onClose} disabled={saving !== null}>
             {t("common.cancel")}
           </Button>
-          <Button onClick={submit} disabled={saving}>
+          <LoadingButton busy={saving === "save"} disabled={saving === "clear"} onClick={submit}>
             {t("common.save")}
-          </Button>
+          </LoadingButton>
         </>
       }
     >

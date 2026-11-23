@@ -1,15 +1,19 @@
 import * as React from "react";
-import { Copy, KeyRound, Plus, Trash2, Check, ChevronRight, MapPin, Pencil, RotateCcw, SlidersHorizontal } from "lucide-react";
+import { Copy, KeyRound, Plus, Trash2, Check, MapPin, Pencil, RotateCcw } from "lucide-react";
 import { api, ApiError, type APIKey, type APIKeyPolicyInput, type BudgetPeriod, type KeyOrigin, type OfferedModel } from "@/lib/api";
-import { copyToClipboard, errorMessage, useAsync } from "@/lib/hooks";
+import { copyToClipboard, errorMessage, useAsync, useDelayedFlag } from "@/lib/hooks";
+import { useOptimisticFlags } from "@/lib/optimistic";
 import { useT, type TFunction } from "@/lib/i18n";
 import { cn, formatRelative, formatTime, formatUSD } from "@/lib/utils";
-import { PageHeader } from "@/components/layout";
+import { PageHeader } from "@/components/layout/page-header";
 import { ModelPicker } from "@/components/model-picker";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { ConfirmDialog, Dialog, Sheet } from "@/components/ui/dialog";
-import { Field, Input } from "@/components/ui/input";
+import { ConfirmDialog, Dialog, Sheet } from "@/components/kit/dialog";
+import { Field, Input } from "@/components/kit/input";
+import { LoadingButton } from "@/components/kit/loading-button";
+import { SaveStatus } from "@/components/kit/save-status";
+import { ListRowsSkeleton, LoadingGate, TableRowsSkeleton } from "@/components/kit/skeletons";
 import {
   Badge,
   EmptyState,
@@ -24,14 +28,14 @@ import {
   Td,
   Th,
   Tr,
-} from "@/components/ui/misc";
-import { useToast } from "@/components/ui/toast";
+} from "@/components/kit/misc";
+import { useToast } from "@/components/kit/toast";
 
 type SortKey = "recent" | "name" | "lastUsed";
 
 export function Keys() {
   const t = useT();
-  const { data, loading, error, reload } = useAsync(() => api.keys(), ["keys"]);
+  const { data, initialLoading, error, reload } = useAsync(() => api.keys(), ["keys"]);
   const { toast } = useToast();
 
   const [search, setSearch] = React.useState("");
@@ -89,22 +93,14 @@ export function Keys() {
     try {
       await api.deleteKey(deleting.id);
       toast(t("keys.deleted", { name: deleting.name }));
-      reload();
+      void reload();
     } catch (e) {
       toast(errorMessage(e), "error");
-    } finally {
-      setDeleting(null);
     }
   }
 
-  async function toggle(k: APIKey, enabled: boolean) {
-    try {
-      await api.setKeyEnabled(k.id, enabled);
-      reload();
-    } catch (e) {
-      toast(errorMessage(e), "error");
-    }
-  }
+  // The switch flips at once; a failed save puts it back and says so on the row.
+  const flags = useOptimisticFlags<number>((id, enabled) => api.setKeyEnabled(id, enabled), reload);
 
   return (
     <>
@@ -154,15 +150,12 @@ export function Keys() {
         )}
       </div>
 
-      <ErrorBanner message={error} />
+      <ErrorBanner message={error} onRetry={() => void reload()} />
 
       <Card>
         <CardContent className="p-0">
-          {loading && !data ? (
-            <div className="flex justify-center py-12">
-              <Spinner className="text-muted-foreground" />
-            </div>
-          ) : visible.length === 0 ? (
+          <LoadingGate loading={initialLoading} skeleton={<TableRowsSkeleton rows={5} columns={5} />}>
+          {visible.length === 0 ? (
             <EmptyState
               icon={KeyRound}
               title={filtered ? t("keys.emptyFiltered") : t("keys.empty")}
@@ -199,7 +192,14 @@ export function Keys() {
                     <Td><Expiration apiKey={k} /></Td>
                     <Td className="text-muted-foreground">{formatRelative(k.last_used_at, { never: t("common.never"), justNow: t("common.justNow") })}</Td>
                     <Td>
-                      <Switch checked={k.enabled} onCheckedChange={(v) => void toggle(k, v)} />
+                      <div className="flex items-center gap-2">
+                        <Switch
+                          checked={flags.value(k.id, k.enabled)}
+                          onCheckedChange={(v) => void flags.toggle(k.id, v)}
+                          aria-label={t("common.enabled")}
+                        />
+                        <SaveStatus state={flags.status(k.id)} onRetry={() => flags.retry(k.id)} />
+                      </div>
                     </Td>
                     <Td className="pr-5">
                       <div className="flex justify-end">
@@ -234,6 +234,7 @@ export function Keys() {
               </tbody>
             </Table>
           )}
+          </LoadingGate>
         </CardContent>
       </Card>
 
@@ -247,7 +248,7 @@ export function Keys() {
             setEditing(null);
           }
         }}
-        onSaved={reload}
+        onSaved={() => void reload()}
       />
 
       <OriginsDialog apiKey={origins} onClose={() => setOrigins(null)} />
@@ -257,7 +258,7 @@ export function Keys() {
         onOpenChange={(o) => !o && setDeleting(null)}
         title={t("keys.deleteTitle", { name: deleting?.name ?? "" })}
         description={t("keys.deleteDescription")}
-        onConfirm={() => void remove()}
+        onConfirm={remove}
       />
     </>
   );
@@ -273,6 +274,7 @@ function SecretCell({ apiKey }: { apiKey: APIKey }) {
   const { toast } = useToast();
   const [busy, setBusy] = React.useState(false);
   const [copied, setCopied] = React.useState(false);
+  const showSpinner = useDelayedFlag(busy);
 
   async function copy() {
     setBusy(true);
@@ -304,7 +306,7 @@ function SecretCell({ apiKey }: { apiKey: APIKey }) {
           disabled={!apiKey.revealable || busy}
           onClick={() => void copy()}
         >
-          {busy ? <Spinner className="size-4" /> : copied ? <Check className="text-[--color-success]" /> : <Copy />}
+          {showSpinner ? <Spinner decorative className="size-4" /> : copied ? <Check className="text-[--color-success]" /> : <Copy />}
         </Button>
       </span>
     </div>
@@ -361,53 +363,6 @@ const EXPIRY_DAYS: Record<Exclude<ExpiryChoice, "never" | "custom">, number> = {
   "7": 7, "30": 30, "90": 90,
 };
 
-type PresetId = "dev" | "production" | "share" | "script";
-
-type Preset = {
-  id: PresetId;
-  /** No "custom" here: a purpose states a window, it does not defer one. */
-  expiry: Exclude<ExpiryChoice, "custom">;
-  restrictModels: boolean;
-  rate: RateChoice;
-  maxConcurrent?: string;
-};
-
-/**
- * A purpose fills the form in. It is not stored, not sent, and not a plan —
- * every value it writes is on screen before the key is created and can be
- * changed first, which is the only reason it is allowed to choose at all.
- *
- * Change a number here and the cards say so by themselves: their summary line
- * is built from the form the preset produces, never from a translated string
- * repeating it.
- */
-const PRESETS: Preset[] = [
-  { id: "dev", expiry: "never", restrictModels: false, rate: "unlimited" },
-  { id: "production", expiry: "never", restrictModels: true, rate: "relaxed" },
-  { id: "share", expiry: "7", restrictModels: true, rate: "strict" },
-  { id: "script", expiry: "30", restrictModels: false, rate: "custom", maxConcurrent: "4" },
-];
-
-function presetLabel(id: PresetId, t: TFunction): string {
-  switch (id) {
-    case "dev": return t("keys.presetDev");
-    case "production": return t("keys.presetProduction");
-    case "share": return t("keys.presetShare");
-    case "script": return t("keys.presetScript");
-  }
-}
-
-function applyPreset(p: Preset): PolicyForm {
-  const form: PolicyForm = {
-    ...emptyPolicy,
-    restrictModels: p.restrictModels,
-    expiryChoice: p.expiry,
-    expiresAt: expiryFromChoice(p.expiry, ""),
-    rateChoice: p.rate,
-    maxConcurrent: p.maxConcurrent ?? "",
-  };
-  return { ...form, ...rateValues(p.rate, form) };
-}
 
 /** The chosen window as a local datetime-local value. Custom keeps what is
  *  already typed; never has no date at all. */
@@ -444,11 +399,6 @@ function rateChoiceOf(form: PolicyForm): RateChoice {
   if (form.rpm === RELAXED_RPM) return "relaxed";
   if (form.rpm === STRICT_RPM) return "strict";
   return "custom";
-}
-
-function samePolicy(a: PolicyForm, b: PolicyForm): boolean {
-  const flat = (f: PolicyForm) => JSON.stringify({ ...f, allowedModels: [...f.allowedModels].sort() });
-  return flat(a) === flat(b);
 }
 
 /** The typed cap as a number, or null when there is none. */
@@ -518,10 +468,6 @@ function KeyDialog({
   const [name, setName] = React.useState("");
   const [nameTouched, setNameTouched] = React.useState(false);
   const [policy, setPolicy] = React.useState<PolicyForm>(emptyPolicy);
-  const [preset, setPreset] = React.useState<PresetId | null>(null);
-  // What the preset wrote, kept so the card can say when it no longer holds.
-  const [presetBase, setPresetBase] = React.useState<PolicyForm | null>(null);
-  const [adjusting, setAdjusting] = React.useState(false);
   const [issued, setIssued] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
   // What the key has spent this window. Local, because resetting it changes
@@ -558,16 +504,9 @@ function KeyDialog({
 
   React.useEffect(() => {
     if (!open) return;
-    // Creating starts on the first purpose rather than on a blank form: it is
-    // the common one, and it makes "create" work without touching anything.
-    const first = PRESETS[0];
-    const form = apiKey ? policyFromKey(apiKey) : applyPreset(first);
-    setName(apiKey?.name ?? presetLabel(first.id, t));
+    setName(apiKey?.name ?? "");
     setNameTouched(false);
-    setPolicy(form);
-    setPreset(apiKey ? null : first.id);
-    setPresetBase(apiKey ? null : form);
-    setAdjusting(false);
+    setPolicy(apiKey ? policyFromKey(apiKey) : emptyPolicy);
     setIssued(null);
     setSpent(apiKey?.spent_usd ?? 0);
   }, [open, apiKey, t]);
@@ -586,27 +525,17 @@ function KeyDialog({
     }
   }
 
-  function choosePreset(p: Preset) {
-    const form = applyPreset(p);
-    setPolicy(form);
-    setPreset(p.id);
-    setPresetBase(form);
-    // The name follows the purpose until it is typed in.
-    if (!nameTouched) setName(presetLabel(p.id, t));
-  }
-
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     // An empty allow-list means "every model" to the server, so a restricted
     // key with nothing picked would silently be the opposite of what it says.
     if (policy.restrictModels && policy.allowedModels.length === 0) {
-      setAdjusting(true);
       toast(t("keys.modelsPickedEmpty"), "error");
       return;
     }
-    // A name the operator typed is used as typed, and a clash is reported. One
-    // the form filled in from a purpose is only a suggestion, so it steps
-    // aside for a name already in use rather than failing the save.
+    // A name the operator typed is used as typed, and a clash is reported. A
+    // key left unnamed gets the default name, stepping aside for one already
+    // in use rather than failing the save.
     const typed = name.trim();
     const chosen = typed || t("keys.defaultName");
     const finalName = nameTouched && typed ? chosen : freeName(chosen, existingNames);
@@ -637,8 +566,6 @@ function KeyDialog({
     }
   }
 
-  const customised = presetBase !== null && !samePolicy(policy, presetBase);
-
   return (
     <Sheet
       open={open}
@@ -667,9 +594,9 @@ function KeyDialog({
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               {t("common.cancel")}
             </Button>
-            <Button type="submit" form="key-form" disabled={busy}>
-              {busy && <Spinner />} {editing ? t("common.save") : t("common.create")}
-            </Button>
+            <LoadingButton type="submit" form="key-form" busy={busy}>
+              {editing ? t("common.save") : t("common.create")}
+            </LoadingButton>
           </>
         )
       }
@@ -678,22 +605,6 @@ function KeyDialog({
         <IssuedStep secret={issued} name={name} policy={policy} />
       ) : (
         <form id="key-form" autoComplete="off" onSubmit={(e) => void submit(e)} className="space-y-5">
-          {!editing && (
-            <Field label={t("keys.purpose")}>
-              <div className="grid gap-2 sm:grid-cols-2">
-                {PRESETS.map((p) => (
-                  <PresetCard
-                    key={p.id}
-                    preset={p}
-                    selected={preset === p.id}
-                    customised={preset === p.id && customised}
-                    onSelect={() => choosePreset(p)}
-                  />
-                ))}
-              </div>
-            </Field>
-          )}
-
           <Field label={t("common.name")} hint={t("keys.nameHint")}>
             <Input
               value={name}
@@ -707,29 +618,17 @@ function KeyDialog({
             />
           </Field>
 
-          {!editing && !adjusting && (
-            <div>
-              <PolicyReview policy={policy} label={t("keys.presetWrites")} />
-              <Button type="button" variant="outline" size="sm" className="mt-2.5" onClick={() => setAdjusting(true)}>
-                <SlidersHorizontal /> {t("keys.adjust")}
-              </Button>
-              <p className="mt-1.5 text-xs text-muted-foreground">{t("keys.adjustHint")}</p>
-            </div>
-          )}
-
-          {(editing || adjusting) && (
-            <PolicyFields
-              policy={policy}
-              onChange={setPolicy}
-              models={availableModels.data ?? []}
-              modelsLoading={availableModels.loading}
-              modelsError={availableModels.error}
-              disabled={busy}
-              apiKey={apiKey}
-              spent={spent}
-              onReset={apiKey ? () => void resetBudget() : undefined}
-            />
-          )}
+          <PolicyFields
+            policy={policy}
+            onChange={setPolicy}
+            models={availableModels.data ?? []}
+            modelsLoading={availableModels.loading}
+            modelsError={availableModels.error}
+            disabled={busy}
+            apiKey={apiKey}
+            spent={spent}
+            onReset={apiKey ? () => void resetBudget() : undefined}
+          />
         </form>
       )}
     </Sheet>
@@ -764,44 +663,6 @@ function Steps({ steps, active }: { steps: string[]; active: number }) {
   );
 }
 
-function PresetCard({
-  preset,
-  selected,
-  customised,
-  onSelect,
-}: {
-  preset: Preset;
-  selected: boolean;
-  customised: boolean;
-  onSelect: () => void;
-}) {
-  const t = useT();
-  const summary = [
-    preset.expiry === "never"
-      ? t("keys.neverExpires")
-      : t("keys.expiresInDays", { days: String(EXPIRY_DAYS[preset.expiry]) }),
-    preset.restrictModels ? t("keys.modelsPickedShort") : t("keys.modelsAll"),
-    limitSummary(applyPreset(preset), t) || t("keys.unlimited"),
-  ].join(" · ");
-
-  return (
-    <button
-      type="button"
-      onClick={onSelect}
-      className={cn(
-        "rounded-lg border px-3 py-2.5 text-left transition-colors",
-        selected ? "border-primary bg-accent/60" : "border-border hover:bg-muted/50",
-      )}
-    >
-      <span className="flex items-center gap-1.5 text-sm font-medium">
-        {presetLabel(preset.id, t)}
-        {customised && <Badge variant="accent">{t("keys.presetCustomised")}</Badge>}
-      </span>
-      <span className="mt-1 block text-xs text-muted-foreground">{summary}</span>
-    </button>
-  );
-}
-
 /** What the key will allow, in three lines, before it exists. */
 function PolicyReview({ policy, label, name }: { policy: PolicyForm; label: string; name?: string }) {
   const t = useT();
@@ -827,8 +688,8 @@ function PolicyReview({ policy, label, name }: { policy: PolicyForm; label: stri
   );
 }
 
-/** The three settings, each folded to its current value. This is the block the
- *  edit sheet shows on its own — one form, two shells. */
+/** Every limit a key can have, laid out in full. Creating and editing a key
+ *  show the same block. */
 function PolicyFields({
   policy,
   onChange,
@@ -856,12 +717,8 @@ function PolicyFields({
   const set = (patch: Partial<PolicyForm>) => onChange({ ...policy, ...patch });
 
   return (
-    <div className="space-y-2">
-      <Disclosure
-        title={t("keys.expiration")}
-        value={expiryText(policy, t)}
-        defaultOpen={policy.expiresAt !== ""}
-      >
+    <div className="space-y-6">
+      <PolicySection title={t("keys.expiration")}>
         <ChoiceChips
           value={policy.expiryChoice}
           disabled={disabled}
@@ -884,13 +741,9 @@ function PolicyFields({
           />
         )}
         <p className="text-xs text-muted-foreground">{t("keys.expirationHint")}</p>
-      </Disclosure>
+      </PolicySection>
 
-      <Disclosure
-        title={t("keys.allowedModels")}
-        value={modelsText(policy, t)}
-        defaultOpen={policy.restrictModels}
-      >
+      <PolicySection title={t("keys.allowedModels")}>
         <Tabs
           value={policy.restrictModels ? "picked" : "all"}
           onValueChange={(v) => set({ restrictModels: v === "picked" })}
@@ -903,8 +756,8 @@ function PolicyFields({
         {!policy.restrictModels ? (
           <p className="text-xs text-muted-foreground">{t("keys.modelsAllHint")}</p>
         ) : modelsLoading ? (
-          <div className="flex min-h-28 items-center justify-center rounded-md border border-border">
-            <Spinner className="text-muted-foreground" />
+          <div className="min-h-28 rounded-md border border-border p-3">
+            <LoadingGate loading skeleton={<ListRowsSkeleton rows={4} />}>{null}</LoadingGate>
           </div>
         ) : modelsError ? (
           <ErrorBanner message={modelsError} />
@@ -917,13 +770,9 @@ function PolicyFields({
             listClassName="max-h-64"
           />
         )}
-      </Disclosure>
+      </PolicySection>
 
-      <Disclosure
-        title={t("keys.budget")}
-        value={budgetText(policy, t)}
-        defaultOpen={policy.budget !== ""}
-      >
+      <PolicySection title={t("keys.budget")}>
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative">
             <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
@@ -978,13 +827,9 @@ function PolicyFields({
         {budgetValue(policy) !== null && (
           <p className="text-xs text-muted-foreground">{t("keys.budgetApproximate")}</p>
         )}
-      </Disclosure>
+      </PolicySection>
 
-      <Disclosure
-        title={t("keys.rateSection")}
-        value={limitSummary(policy, t) || t("keys.unlimited")}
-        defaultOpen={policy.rateChoice !== "unlimited"}
-      >
+      <PolicySection title={t("keys.rateSection")}>
         <ChoiceChips
           value={policy.rateChoice}
           disabled={disabled}
@@ -999,7 +844,7 @@ function PolicyFields({
         {/* The seven fields exist for the operator who wants them and stay out
             of the way of everyone else, who gets the same numbers from a chip. */}
         {policy.rateChoice === "custom" ? (
-          <div className="-mx-3 -mb-3">
+          <div className="rounded-md border border-border [&>section:first-child]:border-t-0">
             <LimitGroup title={t("keys.requestLimits")} hint={t("keys.unlimitedHint")}>
               <LimitRow label={t("keys.rpmLabel")} value={policy.rpm} onChange={(v) => set({ rpm: v })} />
               <LimitRow label={t("keys.rphLabel")} value={policy.rph} onChange={(v) => set({ rph: v })} />
@@ -1019,42 +864,19 @@ function PolicyFields({
         ) : (
           <p className="text-xs text-muted-foreground">{t("keys.unlimitedHint")}</p>
         )}
-      </Disclosure>
+      </PolicySection>
     </div>
   );
 }
 
-/** A folded setting that says its current value while it is folded. Its own
- *  state, not a prop: a re-render on every keystroke would otherwise snap a
- *  `<details open={…}>` shut under the cursor. */
-function Disclosure({
-  title,
-  value,
-  defaultOpen = false,
-  children,
-}: {
-  title: string;
-  value: string;
-  defaultOpen?: boolean;
-  children: React.ReactNode;
-}) {
-  const [open, setOpen] = React.useState(defaultOpen);
+// One part of a key's policy: a plain heading over its controls, always open,
+// so every limit a key has is visible without clicking anything.
+function PolicySection({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <details
-      className="group rounded-md border border-border"
-      open={open}
-      onToggle={(e) => setOpen(e.currentTarget.open)}
-    >
-      {/* list-none drops the browser's own triangle, which would otherwise sit
-          next to the chevron. */}
-      <summary className="flex cursor-pointer list-none select-none items-center gap-2 px-3 py-2.5 text-sm [&::-webkit-details-marker]:hidden">
-        <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-90" />
-        <span className="font-medium">{title}</span>
-        {/* Only worth saying while the value itself is hidden. */}
-        <span className="ml-auto truncate text-xs text-muted-foreground group-open:hidden">{value}</span>
-      </summary>
-      <div className="space-y-2.5 border-t border-border/70 px-3 py-3">{children}</div>
-    </details>
+    <section className="space-y-2.5">
+      <h3 className="text-sm font-medium">{title}</h3>
+      {children}
+    </section>
   );
 }
 
@@ -1356,6 +1178,7 @@ function OriginsDialog({ apiKey, onClose }: { apiKey: APIKey | null; onClose: ()
   const t = useT();
   const [origins, setOrigins] = React.useState<KeyOrigin[] | null>(null);
   const [error, setError] = React.useState("");
+  const [attempt, setAttempt] = React.useState(0);
   const days = 30;
 
   React.useEffect(() => {
@@ -1365,6 +1188,7 @@ function OriginsDialog({ apiKey, onClose }: { apiKey: APIKey | null; onClose: ()
       return;
     }
     let cancelled = false;
+    setError("");
     api
       .keyOrigins(apiKey.id, days)
       .then((r) => !cancelled && setOrigins(r.origins))
@@ -1372,7 +1196,7 @@ function OriginsDialog({ apiKey, onClose }: { apiKey: APIKey | null; onClose: ()
     return () => {
       cancelled = true;
     };
-  }, [apiKey]);
+  }, [apiKey, attempt]);
 
   return (
     <Dialog
@@ -1384,10 +1208,10 @@ function OriginsDialog({ apiKey, onClose }: { apiKey: APIKey | null; onClose: ()
       <p className="mb-4 text-sm text-muted-foreground">
         {t("keys.originsHint", { days: String(days) })}
       </p>
-      <ErrorBanner message={error} />
-      {!origins ? (
-        <div className="flex justify-center py-8">
-          <Spinner className="text-muted-foreground" />
+      <ErrorBanner message={error} onRetry={() => setAttempt((n) => n + 1)} />
+      {error ? null : !origins ? (
+        <div className="min-h-28">
+          <LoadingGate loading skeleton={<ListRowsSkeleton rows={3} />}>{null}</LoadingGate>
         </div>
       ) : origins.length === 0 ? (
         <p className="py-6 text-center text-sm text-muted-foreground">{t("keys.originsEmpty")}</p>

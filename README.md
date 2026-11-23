@@ -117,8 +117,7 @@ DATA_DIR=./data ./bin/polyglot
 ```
 
 Open <http://localhost:3000>. On a binary install, read the one-time credential
-from `data/setup.token` (or set `POLYGLOT_SETUP_TOKEN`) and enter it in the
-setup form. Create an administrator, add a provider, then create an API key.
+from `data/setup.token` and enter it in the setup form. Create an administrator, add a provider, then create an API key.
 
 ### First provider
 
@@ -389,8 +388,8 @@ the same principle.
 
 Images and PDFs convert between all five protocols. Inline base64 is always
 lossless. Remote URLs are forwarded to protocols that fetch them; Gemini does
-not, so that pairing is reported unless `FETCH_REMOTE_MEDIA=true`, in which
-case Polyglot downloads and inlines it — with SSRF protections (private IP
+not, so that pairing is reported unless **Settings → Runtime → Download linked
+images and files** is on, in which case Polyglot downloads and inlines it — with SSRF protections (private IP
 refusal, size cap, type validation, redirect limits).
 
 The Google Gen AI Go SDK can connect through Polyglot over WebSocket for
@@ -501,46 +500,94 @@ and every client using it follows — no code change, no redeployment.
 Display timezone (stored per-administrator, timestamps always UTC internally),
 language, and the password change form.
 
+The **Runtime** tab holds the instance parameters that used to be environment
+variables: upstream timeout, provider cooldown, request body limit, request log
+retention, proxy-header trust, private-upstream blocking, remote media download
+and its size cap, update checks, Prometheus metrics (with the scrape token) and
+tracing. Changes are saved to the database, encrypted, and apply immediately.
+Metrics and tracing are set up at startup, so changing them needs a restart.
+
 ## Configuration
 
-Everything that varies per deployment is an environment variable; everything
-else lives in the database and is managed through the WebUI.
+Only three environment variables are left, the ones Polyglot needs before the
+database is open. Everything else is in the WebUI under **Settings → Runtime**.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `PORT` | `3000` | Listen port |
-| `LISTEN` | `127.0.0.1:3000` | Full listen address (overrides `PORT`) |
-| `DATA_DIR` | `/data` | SQLite file, encryption key, runtime data |
-| `DB_PATH` | `$DATA_DIR/polyglot.db` | Override database location only |
-| `LOG_RETENTION_DAYS` | `30` | `0` keeps logs forever |
-| `UPSTREAM_TIMEOUT` | `10m` | Per-upstream-request ceiling |
-| `PROVIDER_COOLDOWN` | `30s` | How long a failed provider is skipped |
-| `MAX_REQUEST_MB` | `32` | Client request body limit |
+| `LISTEN` | `127.0.0.1:3000` (`:3000` in the Docker image) | Listen address, e.g. `:3000` for every interface |
+| `DATA_DIR` | `/data`, falling back to `./data` | SQLite database, encryption key, setup token |
 | `LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
-| `LOG_FORMAT` | `text` | `json` for structured logs |
-| `PUBLIC_URL` | — | `https://` value enables Secure cookies |
-| `SECURE_COOKIES` | `false` | Forces Secure cookies without `PUBLIC_URL` |
-| `BLOCK_PRIVATE_UPSTREAM` | `false` | Refuse providers on private IPs |
-| `TRUST_PROXY_HEADERS` | `true` | Honour `X-Forwarded-For`; turn off if the port is reachable without the proxy |
-| `POLYGLOT_SECRET_KEY` | — | Override `$DATA_DIR/secret.key` |
-| `POLYGLOT_SETUP_TOKEN` | `$DATA_DIR/setup.token` | Override the one-time first-run credential |
-| `FETCH_REMOTE_MEDIA` | `false` | Download client-linked images for non-fetching upstreams |
-| `MAX_MEDIA_MB` | `20` | Per-attachment download cap |
-| `UPDATE_CHECK_ENABLED` | `true` | Check public GitHub tags when an administrator opens the WebUI |
-| `UPDATE_REPOSITORY` | `qunqin24/polyglot` | GitHub `owner/repository` used for update checks |
 
-### Telemetry variables
+All three also accept a `POLYGLOT_` prefix (`POLYGLOT_LISTEN`, and so on). Logs
+are always plain text. `polyglot help` prints this table and `polyglot config`
+shows the values in effect, including the ones stored in the database.
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `TELEMETRY_ENABLED` | `true` | Master switch for metrics and tracing |
-| `METRICS_ENABLED` | `true` | Collect Prometheus metrics in process |
-| `METRICS_TOKEN` | — | Bearer token for `GET /metrics` (no token = no endpoint) |
-| `TRACING_ENABLED` | `false` | Emit OpenTelemetry spans |
-| `OTLP_ENDPOINT` | — | Your collector, e.g. `http://collector:4318` |
-| `OTLP_HEADERS` | — | Extra collector headers, `k=v,k2=v2` |
-| `TRACE_SAMPLE_RATIO` | `1` | Fraction of self-started traces, `0` to `1` |
-| `OTEL_SERVICE_NAME` | `polyglot` | `service.name` on exported spans |
+### Runtime settings
+
+**Settings → Runtime** in the WebUI:
+
+| Group | Settings |
+|---|---|
+| Requests | Upstream timeout (seconds), provider cooldown (seconds), request body limit (MB), request log retention (days, `0` keeps logs forever) |
+| Network and security | Trust proxy headers, block private-network upstreams, download linked images and files (with a per-attachment limit in MB) |
+| Update checks | Check for new versions, repository to check |
+| Monitoring | Prometheus metrics and its scrape token; tracing, collector address, collector headers, sample ratio, service name |
+
+They are stored in the database, encrypted because they include the scrape
+token and collector headers. Saving applies them immediately, except metrics
+and tracing, which take effect after a restart.
+
+**Trust proxy headers** is on by default so the request log shows real client
+addresses behind a reverse proxy. Turn it off if the port can be reached
+without the proxy, since otherwise clients can forge `X-Forwarded-For`.
+
+### Handled automatically
+
+These used to be configurable and no longer need to be:
+
+- **Encryption key.** Always `$DATA_DIR/secret.key`, generated on first start.
+- **Setup token.** Always generated into `$DATA_DIR/setup.token` on first start.
+- **Secure cookies.** Decided per request: on when the request itself is TLS,
+  or when trust proxy headers is on and the proxy sent `X-Forwarded-Proto: https`.
+- **Metrics token.** Generated on first start. View, copy or regenerate it in
+  **Settings → Runtime**.
+- **Metrics and tracing** each have their own switch; there is no master switch.
+
+### Upgrading from an earlier version
+
+On the first start after upgrading, if the database holds no runtime settings
+yet, Polyglot imports whichever of the old variables are still set (including
+the `POLYGLOT_`-prefixed spellings) and logs a warning that they can now be
+removed. From then on those variables are ignored. If one is still set on a
+later start, the log warns about it. Change values in the WebUI.
+
+The imported variables are `LOG_RETENTION_DAYS`, `UPSTREAM_TIMEOUT`,
+`PROVIDER_COOLDOWN`, `MAX_REQUEST_MB`, `TRUST_PROXY_HEADERS`,
+`BLOCK_PRIVATE_UPSTREAM`, `FETCH_REMOTE_MEDIA`, `MAX_MEDIA_MB`,
+`UPDATE_CHECK_ENABLED`, `UPDATE_REPOSITORY`, `METRICS_ENABLED`, `METRICS_TOKEN`,
+`TRACING_ENABLED`, `OTLP_ENDPOINT`, `OTLP_HEADERS`, `TRACE_SAMPLE_RATIO`,
+`OTEL_SERVICE_NAME`. `TELEMETRY_ENABLED` has no setting of its own any more;
+`false` turns both metrics and tracing off on import. `PUBLIC_URL` and
+`SECURE_COOKIES` are no longer needed: Secure cookies are decided per request
+(see above). `LOG_FORMAT` is gone: logs are always plain text. Durations with
+units (`UPSTREAM_TIMEOUT=10m`) are read as before and stored in seconds.
+
+Some other changes to check:
+
+- **`PORT` and `DB_PATH` stop the server from starting.** Silently ignoring
+  them would move the server to another port or open an empty database, so
+  Polyglot exits with a message instead. Replace `PORT=8080` with
+  `LISTEN=:8080`. The database is always `$DATA_DIR/polyglot.db`: move the file
+  there (or point `DATA_DIR` at its directory) and unset `DB_PATH`.
+- **`POLYGLOT_SECRET_KEY`.** If it is still set, the first start writes the key
+  derived from it into `$DATA_DIR/secret.key`, so data encrypted with it stays
+  readable. An existing `secret.key` with a different key is renamed to
+  `secret.key.replaced-<timestamp>` first. After that, unset the variable.
+- **`POLYGLOT_SETUP_TOKEN`** is no longer read. The token is always generated
+  in `$DATA_DIR/setup.token`.
+- **`/metrics`** now answers to the token shown in **Settings → Runtime**
+  whenever metrics are on. If you used to set `METRICS_TOKEN`, it was imported
+  and your Prometheus config keeps working.
 
 ### HTTPS
 
@@ -561,14 +608,15 @@ When a signed-in administrator opens the WebUI, the server checks the public
 GitHub Tags API for a newer compatible release. Successful results are cached
 for six hours; no prompts, provider data or instance identifiers are sent. The
 request necessarily exposes the server IP and a Polyglot version User-Agent to
-GitHub. Set `UPDATE_CHECK_ENABLED=false` to make this request disappear.
+GitHub. Turn off **Check for new versions** in **Settings → Runtime** to make this request disappear.
 
 ### Metrics
 
-Collected in process by default (a few atomic adds per request). Exposed at
-`GET /metrics` only when `METRICS_TOKEN` is set — the port is often
-internet-reachable, and an open `/metrics` would publish provider names, model
-list and traffic volumes.
+Collected in process by default (a few atomic adds per request); the switch is
+in **Settings → Runtime**, and changing it needs a restart. While metrics are
+on, `GET /metrics` answers only to the scrape token shown on that page (copy or
+regenerate it there) — the port is often internet-reachable, and an open
+`/metrics` would publish provider names, model list and traffic volumes.
 
 ```yaml
 # prometheus.yml
@@ -576,7 +624,7 @@ scrape_configs:
   - job_name: polyglot
     static_configs: [{ targets: ["polyglot:3000"] }]
     authorization:
-      credentials: "<METRICS_TOKEN value>"
+      credentials: "<scrape token copied from Settings → Runtime>"
 ```
 
 Key metrics:
@@ -619,12 +667,11 @@ when you press the button, and it sends nothing — it is a GET of a public file
 
 ### Tracing
 
-Off by default. Point it at your own collector:
-
-```bash
-TRACING_ENABLED=true
-OTLP_ENDPOINT=http://collector:4318
-```
+Off by default. In **Settings → Runtime**, turn on tracing and set the
+collector address to your own, e.g. `http://collector:4318`. Extra collector
+headers (usually an API token from a hosted service), the sample ratio (0 to 1)
+and the service name are on the same page. Tracing is set up at startup, so
+restart Polyglot after changing it.
 
 Transport: **OTLP over HTTP with JSON encoding only.** gRPC is not implemented.
 Metrics are not exported over OTLP — scrape them with Prometheus.
@@ -642,8 +689,8 @@ cookies, query strings, client IPs, and upstream error text.
 
 ### Provider resilience
 
-A provider that just failed is **skipped for 30 seconds** (`PROVIDER_COOLDOWN`)
-when another provider offers the same model. A model served by only one provider
+A provider that just failed is **skipped for 30 seconds** (the default; **failure cooldown** in
+**Settings → Runtime**) when another provider offers the same model. A model served by only one provider
 is never skipped. If every provider for a model is cooling, cooldowns are
 ignored.
 
@@ -673,8 +720,8 @@ curl http://localhost:3000/v1/chat/completions \
   same key as provider credentials so the operator can read one back.
 - Error paths: upstream credentials stripped before reaching clients or logs.
 - Request logs: metadata by default; opt-in full payload recording with 3/7/30-day retention and separate read-only log keys. Transport credentials are excluded; conversation bodies are retained unchanged. See [content logs](docs/log-api.md).
-- Admin sessions: HttpOnly cookie + double-submit CSRF token.
-- First-run setup: one-time token plus a database-enforced single administrator.
+- Admin sessions: HttpOnly cookie + double-submit CSRF token. The Secure flag is set automatically when the request arrives over HTTPS.
+- First-run setup: one-time token (generated into `$DATA_DIR/setup.token`) plus a database-enforced single administrator.
 - Upstream storage: OpenAI Responses and Gemini Interactions default `store` to
   `true` when the field is absent. Polyglot sends `false` explicitly.
 - Media downloads: private IPs refused unconditionally, with size cap, type
@@ -710,6 +757,10 @@ For UI development:
 make web-dev        # terminal 1: Vite on :5173, hot reload
 make dev            # terminal 2: Go API on :3000, proxying UI to Vite
 ```
+
+`make dev` sets `POLYGLOT_DEV=true`, which serves the WebUI from the Vite
+server. `POLYGLOT_DEV_PROXY` changes the Vite address (default
+`http://127.0.0.1:5173`). Both are for local development only.
 
 ### SDK compatibility testing
 
@@ -768,9 +819,9 @@ an existing tag without moving it.
 ```bash
 polyglot                  # start the gateway
 polyglot reset-password   # recover a locked-out administrator
-polyglot config           # effective configuration and where each value came from
+polyglot config           # settings in effect and where each came from (env or WebUI)
 polyglot version          # build version and commit
-polyglot help             # every env var with its default
+polyglot help             # the environment variables and their defaults
 ```
 
 ## Planned, not declined

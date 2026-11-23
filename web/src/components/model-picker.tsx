@@ -4,7 +4,7 @@ import type { OfferedModel } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Input } from "@/components/kit/input";
 
 /**
  * ModelPicker lists what an upstream offers and lets the operator choose.

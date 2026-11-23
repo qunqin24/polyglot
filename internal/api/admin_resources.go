@@ -25,6 +25,10 @@ type providerInput struct {
 	Name     string `json:"name"`
 	Protocol string `json:"protocol"`
 	BaseURL  string `json:"base_url"`
+	// Vendor selects a built-in multi-protocol upstream ("opencode-go",
+	// "commandcode"). Empty for an ordinary provider. When set, protocol and
+	// base_url are filled in from the vendor, whatever was sent.
+	Vendor string `json:"vendor"`
 	// Note is the operator's own description. Free text, stored and shown
 	// back, read by nothing else.
 	Note        string            `json:"note"`
@@ -57,6 +61,15 @@ func (in *providerInput) validate() string {
 	if strings.TrimSpace(in.Name) == "" {
 		return "name is required"
 	}
+	if in.Vendor != "" {
+		v, ok := provider.VendorFor(in.Vendor)
+		if !ok {
+			return "vendor must be empty or one of: " + strings.Join(provider.VendorIDs(), ", ")
+		}
+		// The vendor owns the address and the primary protocol; nothing the
+		// operator could type there would be used.
+		in.Protocol, in.BaseURL = string(v.Primary), v.Root
+	}
 	if !protocol.Name(in.Protocol).Valid() {
 		return "protocol must be one of: " + protocolList()
 	}
@@ -86,6 +99,7 @@ func (in *providerInput) toStore() *store.Provider {
 	p := &store.Provider{
 		Name:         strings.TrimSpace(in.Name),
 		Protocol:     in.Protocol,
+		Vendor:       in.Vendor,
 		BaseURL:      strings.TrimRight(strings.TrimSpace(in.BaseURL), "/"),
 		Note:         strings.TrimSpace(in.Note),
 		Headers:      in.Headers,
@@ -218,12 +232,18 @@ func (s *Server) handleTestProvider(w http.ResponseWriter, r *http.Request) {
 		ID          int64             `json:"id"`
 		Protocol    string            `json:"protocol"`
 		BaseURL     string            `json:"base_url"`
+		Vendor      string            `json:"vendor"`
 		APIKey      *string           `json:"api_key"`
 		Headers     map[string]string `json:"headers"`
 		TimeoutSecs int               `json:"timeout_secs"`
 	}
 	if err := decodeJSON(w, r, &in); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid request body: %v", err)
+		return
+	}
+	vendor, vmsg := vendorInput(in.Vendor, &in.Protocol, &in.BaseURL)
+	if vmsg != "" {
+		writeErr(w, http.StatusBadRequest, "%s", vmsg)
 		return
 	}
 	if !protocol.Name(in.Protocol).Valid() {
@@ -259,6 +279,9 @@ func (s *Server) handleTestProvider(w http.ResponseWriter, r *http.Request) {
 		Headers:  in.Headers,
 		Timeout:  timeout,
 	}
+	if vendor != nil {
+		vendor.Apply(target, vendor.Primary, in.ID)
+	}
 	models, latency, err := s.probe(r.Context(), target, timeout)
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -287,12 +310,31 @@ type probeInput struct {
 	ID          int64             `json:"id"`
 	Protocol    string            `json:"protocol"`
 	BaseURL     string            `json:"base_url"`
+	Vendor      string            `json:"vendor"`
 	APIKey      *string           `json:"api_key"`
 	Headers     map[string]string `json:"headers"`
 	TimeoutSecs int               `json:"timeout_secs"`
 }
 
+// vendorInput resolves a request's vendor id. For a known vendor it overwrites
+// protocol and base URL with the vendor's, and returns it.
+func vendorInput(id string, proto, baseURL *string) (*provider.Vendor, string) {
+	if id == "" {
+		return nil, ""
+	}
+	v, ok := provider.VendorFor(id)
+	if !ok {
+		return nil, "vendor must be empty or one of: " + strings.Join(provider.VendorIDs(), ", ")
+	}
+	*proto, *baseURL = string(v.Primary), v.Root
+	return v, ""
+}
+
 func (s *Server) targetFromInput(r *http.Request, in *probeInput) (*provider.Target, time.Duration, string) {
+	vendor, vmsg := vendorInput(in.Vendor, &in.Protocol, &in.BaseURL)
+	if vmsg != "" {
+		return nil, 0, vmsg
+	}
 	if !protocol.Name(in.Protocol).Valid() {
 		return nil, 0, "protocol must be one of: " + protocolList()
 	}
@@ -313,14 +355,18 @@ func (s *Server) targetFromInput(r *http.Request, in *probeInput) (*provider.Tar
 	if in.TimeoutSecs > 0 && time.Duration(in.TimeoutSecs)*time.Second < timeout {
 		timeout = time.Duration(in.TimeoutSecs) * time.Second
 	}
-	return &provider.Target{
+	t := &provider.Target{
 		Name:     "discover",
 		Protocol: protocol.Name(in.Protocol),
 		BaseURL:  strings.TrimRight(in.BaseURL, "/"),
 		APIKey:   key,
 		Headers:  in.Headers,
 		Timeout:  timeout,
-	}, timeout, ""
+	}
+	if vendor != nil {
+		vendor.Apply(t, vendor.Primary, in.ID)
+	}
+	return t, timeout, ""
 }
 
 // handleDiscoverProviderModels lists what an upstream offers so the operator can
@@ -369,11 +415,16 @@ func (s *Server) handleDiscoverProviderModels(w http.ResponseWriter, r *http.Req
 
 	models := make([]map[string]any, 0, len(found))
 	for _, m := range found {
-		models = append(models, map[string]any{
+		entry := map[string]any{
 			"id":           m.ID,
 			"display_name": m.DisplayName,
 			"registered":   registered[m.ID],
-		})
+		}
+		// Only a multi-protocol vendor says which protocol a model uses.
+		if m.Protocol != "" {
+			entry["protocol"] = string(m.Protocol)
+		}
+		models = append(models, entry)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":         true,
@@ -381,6 +432,30 @@ func (s *Server) handleDiscoverProviderModels(w http.ResponseWriter, r *http.Req
 		"latency_ms": latency.Milliseconds(),
 		"models":     models,
 	})
+}
+
+// handleRevealProviderKey shows the operator the upstream credential they
+// stored on a provider. It is a POST for the same reason handleRevealKey is: the
+// CSRF check covers it, and a GET that returns a secret is reachable by a
+// cross-site page even though it cannot read the reply. The secret goes into the
+// response body and nowhere else — never into a log, never into a URL. The
+// provider list still only says has_api_key.
+func (s *Server) handleRevealProviderKey(w http.ResponseWriter, r *http.Request) {
+	id, err := idParam(r, "id")
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid provider id")
+		return
+	}
+	p, err := s.team().GetProvider(r.Context(), id)
+	if err != nil {
+		writeErr(w, storeErrStatus(err), "%v", err)
+		return
+	}
+	if p.APIKey == "" {
+		writeErr(w, http.StatusNotFound, "this provider has no API key configured")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"secret": p.APIKey})
 }
 
 func (s *Server) handleProviderModels(w http.ResponseWriter, r *http.Request) {
@@ -401,6 +476,9 @@ func (s *Server) handleProviderModels(w http.ResponseWriter, r *http.Request) {
 		APIKey:   p.APIKey,
 		Headers:  p.Headers,
 		Timeout:  20 * time.Second,
+	}
+	if v, ok := provider.VendorFor(p.Vendor); ok {
+		v.Apply(target, v.Primary, p.ID)
 	}
 	found, _, err := s.probe(r.Context(), target, 20*time.Second)
 	if err != nil {
@@ -423,9 +501,16 @@ var ErrDiscoveryUnsupported = errString("this protocol cannot list models")
 func (s *Server) probe(ctx context.Context, t *provider.Target, timeout time.Duration) ([]provider.DiscoveredModel, time.Duration, error) {
 	start := time.Now()
 
-	discoverer, ok := provider.DiscovererFor(t.Protocol)
-	if !ok {
-		return nil, 0, ErrDiscoveryUnsupported
+	var discoverer provider.ModelDiscoverer
+	if t.Vendor != nil {
+		// A vendor lists every model once, whatever protocol each uses.
+		discoverer = t.Vendor
+	} else {
+		d, ok := provider.DiscovererFor(t.Protocol)
+		if !ok {
+			return nil, 0, ErrDiscoveryUnsupported
+		}
+		discoverer = d
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -861,9 +946,19 @@ func protocolList() string {
 // registerChosenModels records the models an operator ticked. It reuses the
 // sync path, so the guarantees there still hold: nothing is deleted, and an
 // operator's enabled flag or display name is never overwritten.
+//
+// On a provider with a built-in vendor each model also gets its protocol, from
+// the vendor's own listing when it can be reached and from its rules when not.
 func (s *Server) registerChosenModels(ctx context.Context, providerID int64, chosen []DiscoveredChoice) (int, error) {
 	if len(chosen) == 0 {
 		return 0, nil
+	}
+	var vendor *provider.Vendor
+	var listed map[string]protocol.Name
+	if p, err := s.team().GetProvider(ctx, providerID); err == nil {
+		if v, ok := provider.VendorFor(p.Vendor); ok {
+			vendor, listed = v, s.vendorProtocols(ctx, p, v)
+		}
 	}
 	models := make([]store.DiscoveredModel, 0, len(chosen))
 	for _, c := range chosen {
@@ -871,7 +966,15 @@ func (s *Server) registerChosenModels(ctx context.Context, providerID int64, cho
 		if id == "" {
 			continue
 		}
-		models = append(models, store.DiscoveredModel{ID: id, DisplayName: c.DisplayName})
+		m := store.DiscoveredModel{ID: id, DisplayName: c.DisplayName}
+		if vendor != nil {
+			p, ok := listed[id]
+			if !ok {
+				p = vendor.ProtocolFor("", id)
+			}
+			m.Protocol = string(p)
+		}
+		models = append(models, m)
 	}
 	if len(models) == 0 {
 		return 0, nil
@@ -880,4 +983,21 @@ func (s *Server) registerChosenModels(ctx context.Context, providerID int64, cho
 		return 0, err
 	}
 	return len(models), nil
+}
+
+// vendorProtocols asks the vendor which protocol each of its models uses,
+// with the provider's own key. Failing is fine: registerChosenModels then
+// falls back to the vendor's rules, and the next sync corrects any guess.
+func (s *Server) vendorProtocols(ctx context.Context, p *store.Provider, v *provider.Vendor) map[string]protocol.Name {
+	t := &provider.Target{Name: p.Name, Protocol: v.Primary, APIKey: p.APIKey, Headers: p.Headers, Timeout: 20 * time.Second}
+	v.Apply(t, v.Primary, p.ID)
+	found, _, err := s.probe(ctx, t, 20*time.Second)
+	if err != nil {
+		return nil
+	}
+	out := make(map[string]protocol.Name, len(found))
+	for _, m := range found {
+		out[m.ID] = m.Protocol
+	}
+	return out
 }

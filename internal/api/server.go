@@ -14,11 +14,13 @@ import (
 	"github.com/qunqin24/polyglot/internal/auth"
 	"github.com/qunqin24/polyglot/internal/config"
 	"github.com/qunqin24/polyglot/internal/gateway"
+	"github.com/qunqin24/polyglot/internal/live"
 	"github.com/qunqin24/polyglot/internal/media"
 	"github.com/qunqin24/polyglot/internal/pricing"
 	"github.com/qunqin24/polyglot/internal/protocol"
 	"github.com/qunqin24/polyglot/internal/provider"
 	"github.com/qunqin24/polyglot/internal/router"
+	"github.com/qunqin24/polyglot/internal/settings"
 	"github.com/qunqin24/polyglot/internal/setup"
 	"github.com/qunqin24/polyglot/internal/store"
 	"github.com/qunqin24/polyglot/internal/telemetry"
@@ -35,60 +37,89 @@ import (
 )
 
 type Server struct {
-	store      *store.Store
-	health     *provider.Health
-	router     *router.Router
-	gw         *gateway.Gateway
-	client     *provider.Client
-	cfg        *config.Config
-	log        *slog.Logger
-	usage      *usage.Logger
-	tel        *telemetry.Telemetry
-	prices     *pricing.Resolver
-	keyLimiter *auth.KeyLimiter
-	setupGuard *setup.Guard
-	updates    *update.Checker
+	store    *store.Store
+	health   *provider.Health
+	router   *router.Router
+	gw       *gateway.Gateway
+	client   *provider.Client
+	cfg      *config.Config
+	settings *settings.Manager
+	// startSettings is what metrics and tracing were built from, to tell a
+	// saved change apart from one that has taken effect.
+	startSettings settings.Values
+	log           *slog.Logger
+	usage         *usage.Logger
+	tel           *telemetry.Telemetry
+	prices        *pricing.Resolver
+	keyLimiter    *auth.KeyLimiter
+	setupGuard    *setup.Guard
+	updates       *update.Checker
+	liveHub       *live.Hub
 }
 
-func NewServer(st *store.Store, cfg *config.Config, log *slog.Logger, ul *usage.Logger,
+func NewServer(st *store.Store, cfg *config.Config, rs *settings.Manager, log *slog.Logger, ul *usage.Logger,
 	tel *telemetry.Telemetry, prices *pricing.Resolver, setupGuard *setup.Guard) *Server {
-	rt := router.New(cfg.UpstreamTimeout)
+	initial := rs.Get()
+	rt := router.New(initial.UpstreamTimeout())
 	client := provider.NewClient()
-	health := provider.NewHealth(cfg.ProviderCooldown)
-	var fetcher *media.Fetcher
-	if cfg.FetchRemoteMedia {
-		fetcher = media.NewFetcher(cfg.MaxMediaBytes, log)
-	}
+	health := provider.NewHealth(initial.ProviderCooldown())
+	// Always built, used only while the setting is on, so turning it on in
+	// the WebUI needs no restart.
+	fetcher := media.NewFetcher(initial.MaxMediaBytes(), log)
+	updates := update.New(initial.UpdateRepository, version.Version, initial.UpdateCheckEnabled)
+	// Every setting that can apply live is pushed to its component here, now
+	// and after each change. Metrics and tracing are built once at start, so
+	// only the scrape token among them follows a change.
+	rs.Subscribe(func(v settings.Values) {
+		rt.SetDefaultTimeout(v.UpstreamTimeout())
+		health.SetCooldown(v.ProviderCooldown())
+		fetcher.SetMaxBytes(v.MaxMediaBytes())
+		updates.Configure(v.UpdateRepository, v.UpdateCheckEnabled)
+		provider.SetBlockPrivate(v.BlockPrivateUpstream)
+		ul.SetRetentionDays(v.LogRetentionDays)
+		tel.SetMetricsToken(v.MetricsToken)
+	})
 	keyLimiter := auth.NewKeyLimiter(st)
 	// Prices are worked out on the usage logger's flush goroutine, and a key
 	// with a budget needs to hear about them. This is the only wire between
 	// the two; without it costs are still logged, they just count against
 	// nothing.
 	ul.OnSpend(keyLimiter)
+	// The live view hears of a request's start from the gateway and of its end
+	// from the usage logger, which is where the price is known.
+	liveHub := live.New()
+	ul.OnPriced(func(rec *store.RequestLog) {
+		liveHub.Publish(live.End(rec.TeamID, live.FromLog(rec)))
+	})
 	return &Server{
-		store:      st,
-		health:     health,
-		router:     rt,
-		client:     client,
-		cfg:        cfg,
-		log:        log,
-		usage:      ul,
-		tel:        tel,
-		prices:     prices,
-		keyLimiter: keyLimiter,
-		setupGuard: setupGuard,
-		updates:    update.New(cfg.UpdateRepository, version.Version, cfg.UpdateCheckEnabled),
+		store:         st,
+		health:        health,
+		router:        rt,
+		client:        client,
+		cfg:           cfg,
+		settings:      rs,
+		startSettings: initial,
+		log:           log,
+		usage:         ul,
+		tel:           tel,
+		prices:        prices,
+		keyLimiter:    keyLimiter,
+		setupGuard:    setupGuard,
+		updates:       updates,
+		liveHub:       liveHub,
 		gw: &gateway.Gateway{
 			Store:      st,
 			Router:     rt,
 			Client:     client,
 			Usage:      ul,
 			Config:     cfg,
+			Settings:   rs,
 			Log:        log,
 			Telemetry:  tel,
 			Health:     health,
 			Media:      fetcher,
 			KeyLimiter: keyLimiter,
+			LiveView:   liveHub,
 		},
 	}
 }
@@ -103,10 +134,18 @@ func (s *Server) team() *store.Scope { return s.store.ForTeam(store.DefaultTeamI
 func (s *Server) Handler() http.Handler {
 	r := chi.NewRouter()
 	// X-Forwarded-For decides the client address unless the operator turned
-	// TRUST_PROXY_HEADERS off. See the field's comment for the trade.
-	if s.cfg.TrustProxyHeaders {
-		r.Use(middleware.RealIP)
-	}
+	// "trust proxy headers" off in the settings. Checked per request, so the
+	// switch applies without a restart.
+	r.Use(func(next http.Handler) http.Handler {
+		withProxy := middleware.RealIP(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if s.settings.Get().TrustProxyHeaders {
+				withProxy.ServeHTTP(w, r)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	})
 	r.Use(requestID)
 	r.Use(requestLogger(s.log))
 	r.Use(middleware.Recoverer)
@@ -115,7 +154,7 @@ func (s *Server) Handler() http.Handler {
 	r.Get("/health", s.handleHealth)
 
 	// Prometheus scrape endpoint. It is registered unconditionally and answers
-	// 404 unless METRICS_TOKEN authorises the caller, so a disabled scrape
+	// 404 unless the metrics token from the settings page authorises the caller, so a disabled scrape
 	// surface looks exactly like a path that was never implemented — and, more
 	// importantly, never falls through to the SPA handler.
 	r.Get("/metrics", s.handleMetrics)
@@ -185,8 +224,12 @@ func (s *Server) Handler() http.Handler {
 			r.Get("/auth/me", s.handleMe)
 			r.Post("/auth/password", s.handleChangePassword)
 			r.Get("/update", s.handleUpdateStatus)
+			r.Get("/live", s.handleLive)
 
 			r.Put("/settings", s.handleUpdateSettings)
+			r.Get("/settings/runtime", s.handleRuntimeSettings)
+			r.Put("/settings/runtime", s.handleUpdateRuntimeSettings)
+			r.Post("/settings/runtime/metrics-token", s.handleRegenerateMetricsToken)
 
 			r.Get("/protocols", s.handleProtocols)
 			r.Get("/stats", s.handleStats)
@@ -195,6 +238,7 @@ func (s *Server) Handler() http.Handler {
 			r.Get("/stats/conversions", s.handleConversionStats)
 			r.Get("/stats/latency", s.handleLatencyStats)
 			r.Get("/stats/cost", s.handleCostStats)
+			r.Get("/stats/spend", s.handleSpendStats)
 			// The same exposition an operator would scrape, behind the admin
 			// session — so the numbers are readable without standing up
 			// Prometheus first.
@@ -208,6 +252,7 @@ func (s *Server) Handler() http.Handler {
 			r.Post("/providers/discover", s.handleDiscoverProviderModels)
 			r.Get("/providers/{id}/models", s.handleProviderModels)
 			r.Post("/providers/{id}/models", s.handleAddProviderModels)
+			r.Post("/providers/{id}/secret", s.handleRevealProviderKey)
 
 			// The registry of real upstream models.
 			r.Get("/models", s.handleListModels)

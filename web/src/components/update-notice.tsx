@@ -1,10 +1,10 @@
 import * as React from "react";
 import { ArrowUpCircle, ExternalLink, RefreshCw, X } from "lucide-react";
 import { api, type UpdateStatus } from "@/lib/api";
-import { errorMessage } from "@/lib/hooks";
+import { errorMessage, isAbort, useCancellable, useSlowHint } from "@/lib/hooks";
 import { useT } from "@/lib/i18n";
 import { Button } from "@/components/ui/button";
-import { Spinner } from "@/components/ui/misc";
+import { LoadingButton } from "@/components/kit/loading-button";
 
 const dismissedKey = "polyglot-dismissed-update";
 const browserCheckInterval = 6 * 60 * 60 * 1000;
@@ -95,26 +95,35 @@ export function UpdateSettings() {
   const [status, setStatus] = React.useState<UpdateStatus | null>(null);
   const [error, setError] = React.useState("");
   const [busy, setBusy] = React.useState(true);
+  const [cancelled, setCancelled] = React.useState(false);
+  const call = useCancellable();
+  const slow = useSlowHint(busy);
 
   const check = React.useCallback(async (refresh: boolean) => {
     setBusy(true);
     setError("");
+    setCancelled(false);
+    const signal = call.start();
     try {
-      setStatus(await api.updateStatus(refresh));
+      const next = await api.updateStatus(refresh, signal);
+      if (call.isCurrent(signal)) setStatus(next);
     } catch (err) {
-      setError(errorMessage(err));
+      if (!call.isCurrent(signal)) return;
+      if (isAbort(err)) setCancelled(true);
+      else setError(errorMessage(err));
     } finally {
-      setBusy(false);
+      if (call.isCurrent(signal)) setBusy(false);
     }
-  }, []);
+  }, [call]);
 
   React.useEffect(() => {
     void check(false);
   }, [check]);
 
-  let message = t("updates.checking");
+  let message = slow ? t("common.slowHint") : t("updates.checking");
   if (!busy) {
-    if (error) message = t("updates.checkFailed", { message: error });
+    if (cancelled) message = t("updates.checkCancelled");
+    else if (error) message = t("updates.checkFailed", { message: error });
     else if (!status?.enabled) message = t("updates.disabled");
     else if (!status.supported) message = t("updates.development");
     else if (status.error) message = t("updates.checkFailed", { message: status.error });
@@ -147,10 +156,22 @@ export function UpdateSettings() {
               </a>
             </Button>
           )}
-          <Button size="sm" variant="outline" disabled={busy || status?.enabled === false} onClick={() => void check(true)}>
-            {busy ? <Spinner /> : <RefreshCw aria-hidden="true" />}
+          {busy && (
+            <Button size="sm" variant="ghost" onClick={call.cancel}>
+              {t("common.cancel")}
+            </Button>
+          )}
+          <LoadingButton
+            size="sm"
+            variant="outline"
+            busy={busy}
+            disabled={status?.enabled === false}
+            icon={<RefreshCw aria-hidden="true" />}
+            iconIsAction
+            onClick={() => void check(true)}
+          >
             {t("updates.check")}
-          </Button>
+          </LoadingButton>
         </div>
       </div>
     </section>

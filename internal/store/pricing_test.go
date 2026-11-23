@@ -262,3 +262,34 @@ func TestOldRequestLogsKeepAnUnknownCost(t *testing.T) {
 		t.Errorf("cost total = %v, want 0 with the gap reported separately", stats.CostUSD)
 	}
 }
+
+// Makers ride along with the catalog and are replaced with it, so a refresh
+// that drops an id drops its maker too.
+func TestModelMakersAreReplacedWithTheCatalog(t *testing.T) {
+	st := priceStore(t)
+	ctx := context.Background()
+
+	first := snapshot("2026-01-01", pricing.Entry{
+		ID: "gpt-5.5", Vendor: "openai", Rates: pricing.Rates{Price: pricing.Price{Input: usd(5)}},
+	})
+	first.Makers = map[string]string{"glm-5.2": "zhipuai", "old-model": "someone"}
+	if err := st.ReplaceCatalog(ctx, first, "embedded"); err != nil {
+		t.Fatalf("replace: %v", err)
+	}
+	second := snapshot("2026-02-01", pricing.Entry{
+		ID: "gpt-5.5", Vendor: "openai", Rates: pricing.Rates{Price: pricing.Price{Input: usd(5)}},
+	})
+	second.Makers = map[string]string{"glm-5.2": "zhipuai", "llama-4": "meta"}
+	second.Names = map[string]string{"glm-5.2": "GLM 5.2"}
+	if err := st.ReplaceCatalog(ctx, second, "models.dev"); err != nil {
+		t.Fatalf("replace again: %v", err)
+	}
+
+	models, err := st.CatalogModels(ctx)
+	if err != nil {
+		t.Fatalf("read catalog models: %v", err)
+	}
+	if len(models) != 2 || models["glm-5.2"] != (CatalogModel{"zhipuai", "GLM 5.2"}) || models["llama-4"] != (CatalogModel{Maker: "meta"}) {
+		t.Errorf("catalog models = %v, want exactly glm-5.2 (named) and llama-4", models)
+	}
+}

@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/qunqin24/polyglot/internal/pricing"
+	"github.com/qunqin24/polyglot/internal/provider"
 	"github.com/qunqin24/polyglot/internal/router"
 	"github.com/qunqin24/polyglot/internal/store"
 )
@@ -75,8 +77,15 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
+	catalog, err := s.store.CatalogModels(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
 	for _, m := range models {
 		m.Ambiguous = ambiguous[m.UpstreamModelID]
+		c := catalog[pricing.Normalize(m.UpstreamModelID)]
+		m.Maker, m.CatalogName = c.Maker, c.Name
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -117,7 +126,8 @@ func (s *Server) handleCreateModel(w http.ResponseWriter, r *http.Request) {
 			router.NamespaceSeparator)
 		return
 	}
-	if _, err := s.team().GetProvider(r.Context(), in.ProviderID); err != nil {
+	prov, err := s.team().GetProvider(r.Context(), in.ProviderID)
+	if err != nil {
 		writeErr(w, storeErrStatus(err), "%v", err)
 		return
 	}
@@ -130,6 +140,11 @@ func (s *Server) handleCreateModel(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.Enabled != nil {
 		m.Enabled = *in.Enabled
+	}
+	// A model added by hand to a multi-protocol provider still needs a
+	// protocol; the vendor's rules choose one, as they do for an unlisted id.
+	if v, ok := provider.VendorFor(prov.Vendor); ok {
+		m.ProtocolOverride = string(v.ProtocolFor("", in.UpstreamModelID))
 	}
 
 	created, err := s.team().CreateModel(r.Context(), m)

@@ -6,6 +6,7 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/qunqin24/polyglot/internal/pricing"
@@ -41,8 +42,12 @@ type Logger struct {
 	log    *slog.Logger
 	prices Pricer
 	spend  SpendRecorder
+	// onPriced hears of every record once it has its price, whether or not it
+	// has a database row yet.
+	onPriced atomic.Pointer[func(*store.RequestLog)]
 
-	retention time.Duration
+	// retention is a time.Duration, atomic because the WebUI can change it.
+	retention atomic.Int64
 
 	mu      sync.Mutex
 	dropped int64
@@ -56,21 +61,37 @@ type Logger struct {
 // counted against any budget.
 func (l *Logger) OnSpend(r SpendRecorder) { l.spend = r }
 
+// OnPriced calls fn with every record as soon as it has been priced, on the
+// flush goroutine (or, when the buffer is full, on the caller's). The record
+// must be treated as read-only. internal/live uses it to report a finished
+// request with the same cost the log row gets. Safe to call while the logger runs.
+func (l *Logger) OnPriced(fn func(*store.RequestLog)) { l.onPriced.Store(&fn) }
+
+// SetRetentionDays changes how old a request log has to be before the next
+// prune removes it. 0 keeps every log.
+func (l *Logger) SetRetentionDays(days int) {
+	l.retention.Store(int64(time.Duration(days) * 24 * time.Hour))
+}
+
 func New(st *store.Store, log *slog.Logger, retentionDays int, prices Pricer) *Logger {
-	return &Logger{
-		st:        st,
-		ch:        make(chan *store.RequestLog, bufferSize),
-		log:       log,
-		prices:    prices,
-		retention: time.Duration(retentionDays) * 24 * time.Hour,
-		done:      make(chan struct{}),
+	l := &Logger{
+		st:     st,
+		ch:     make(chan *store.RequestLog, bufferSize),
+		log:    log,
+		prices: prices,
+		done:   make(chan struct{}),
 	}
+	l.SetRetentionDays(retentionDays)
+	return l
 }
 
 func (l *Logger) Log(rec *store.RequestLog) {
 	select {
 	case l.ch <- rec:
 	default:
+		// The row is lost, but the request still happened: price it and tell
+		// the listener, so a dashboard does not show it running forever.
+		l.price(rec)
 		l.st.RemoveLogContent(rec.ContentID)
 		l.mu.Lock()
 		l.dropped++
@@ -175,6 +196,13 @@ func (l *Logger) Wait(timeout time.Duration) {
 // may well have charged for what it did produce, and writing 0 would state
 // that it did not.
 func (l *Logger) price(rec *store.RequestLog) {
+	l.priceRecord(rec)
+	if fn := l.onPriced.Load(); fn != nil {
+		(*fn)(rec)
+	}
+}
+
+func (l *Logger) priceRecord(rec *store.RequestLog) {
 	if l.prices == nil || rec.ProviderID == nil || rec.UpstreamModel == "" {
 		return
 	}
@@ -202,10 +230,11 @@ func (l *Logger) prune(ctx context.Context) {
 	if err := l.st.PruneLogContents(ctx); err != nil {
 		l.log.Error("prune content logs", "error", err)
 	}
-	if l.retention <= 0 {
+	retention := time.Duration(l.retention.Load())
+	if retention <= 0 {
 		return
 	}
-	n, err := l.st.PruneRequestLogs(ctx, time.Now().Add(-l.retention))
+	n, err := l.st.PruneRequestLogs(ctx, time.Now().Add(-retention))
 	if err != nil {
 		l.log.Error("prune request logs", "error", err)
 		return

@@ -14,10 +14,17 @@ import (
 // Model is a real upstream model a provider offers. Clients may call its
 // UpstreamModelID directly — no alias required.
 type Model struct {
-	ID              int64      `json:"id"`
-	ProviderID      int64      `json:"provider_id"`
-	ProviderName    string     `json:"provider_name,omitempty"`
-	Protocol        string     `json:"protocol,omitempty"`
+	ID           int64  `json:"id"`
+	ProviderID   int64  `json:"provider_id"`
+	ProviderName string `json:"provider_name,omitempty"`
+	// Protocol is the protocol this model is actually called with: its own
+	// override when it has one, the provider's otherwise.
+	Protocol string `json:"protocol,omitempty"`
+	// ProtocolOverride is the model's own protocol, set for a provider that
+	// serves several (see Provider.Vendor). Empty means the provider's.
+	ProtocolOverride string `json:"protocol_override,omitempty"`
+	// ProviderVendor is the provider's built-in vendor id, empty if none.
+	ProviderVendor  string     `json:"-"`
 	UpstreamModelID string     `json:"upstream_model_id"`
 	DisplayName     string     `json:"display_name"`
 	Enabled         bool       `json:"enabled"`
@@ -34,11 +41,20 @@ type Model struct {
 	// Ambiguous reports that another enabled provider offers the same
 	// upstream id, so calling it unqualified resolves by provider priority.
 	Ambiguous bool `json:"ambiguous,omitempty"`
+
+	// Maker is the models.dev id of the company that made the model, e.g.
+	// "zhipuai" for glm-5.2 served by any provider. Empty when the catalog
+	// does not know the id.
+	Maker string `json:"maker,omitempty"`
+	// CatalogName is the maker's name for the model on models.dev, tidied
+	// for display ("DeepSeek V4 Flash"). Empty when the catalog does not
+	// know the id; the WebUI then shows the id.
+	CatalogName string `json:"catalog_name,omitempty"`
 }
 
 const modelCols = `m.id, m.provider_id, p.name, p.protocol, m.upstream_model_id, m.display_name,
 	m.enabled, m.last_seen_at, m.created_at, m.updated_at,
-	m.price_input, m.price_output, m.price_cache_read, m.price_cache_write`
+	m.price_input, m.price_output, m.price_cache_read, m.price_cache_write, m.protocol, p.vendor`
 
 func scanModel(sc interface{ Scan(...any) error }) (*Model, error) {
 	var (
@@ -51,8 +67,11 @@ func scanModel(sc interface{ Scan(...any) error }) (*Model, error) {
 	)
 	if err := sc.Scan(&m.ID, &m.ProviderID, &m.ProviderName, &m.Protocol, &m.UpstreamModelID,
 		&m.DisplayName, &enabled, &lastSeen, &created, &updated,
-		&in, &o, &cr, &cw); err != nil {
+		&in, &o, &cr, &cw, &m.ProtocolOverride, &m.ProviderVendor); err != nil {
 		return nil, err
+	}
+	if m.ProtocolOverride != "" {
+		m.Protocol = m.ProtocolOverride
 	}
 	m.Price = price(in, o, cr, cw)
 	m.Enabled = enabled != 0
@@ -202,10 +221,10 @@ func (t *Scope) GetModel(ctx context.Context, id int64) (*Model, error) {
 func (t *Scope) CreateModel(ctx context.Context, m *Model) (*Model, error) {
 	now := time.Now().Unix()
 	res, err := t.s.db.ExecContext(ctx,
-		`INSERT INTO models (provider_id, upstream_model_id, display_name, enabled, created_at, updated_at)
-		 SELECT ?, ?, ?, ?, ?, ?
+		`INSERT INTO models (provider_id, upstream_model_id, display_name, enabled, protocol, created_at, updated_at)
+		 SELECT ?, ?, ?, ?, ?, ?, ?
 		 WHERE EXISTS (SELECT 1 FROM providers WHERE id = ? AND team_id = ?)`,
-		m.ProviderID, m.UpstreamModelID, m.DisplayName, boolInt(m.Enabled), now, now,
+		m.ProviderID, m.UpstreamModelID, m.DisplayName, boolInt(m.Enabled), m.ProtocolOverride, now, now,
 		m.ProviderID, t.teamID)
 	if err != nil {
 		return nil, fmt.Errorf("create model %q: %w", m.UpstreamModelID, err)
@@ -257,6 +276,10 @@ type SyncResult struct {
 type DiscoveredModel struct {
 	ID          string
 	DisplayName string
+	// Protocol is the protocol this model uses on a multi-protocol provider.
+	// Empty leaves the model on the provider's own, and leaves an existing
+	// model's protocol as it was.
+	Protocol string
 }
 
 // SyncModels records the models a discovery run found.
@@ -308,13 +331,16 @@ func (t *Scope) SyncModels(ctx context.Context, providerID int64, found []Discov
 	}
 
 	stmt, err := tx.PrepareContext(ctx, `INSERT INTO models
-		(provider_id, upstream_model_id, display_name, enabled, last_seen_at, created_at, updated_at)
-		VALUES (?, ?, ?, 1, ?, ?, ?)
+		(provider_id, upstream_model_id, display_name, enabled, protocol, last_seen_at, created_at, updated_at)
+		VALUES (?, ?, ?, 1, ?, ?, ?, ?)
 		ON CONFLICT (provider_id, upstream_model_id) DO UPDATE SET
 			-- Keep a name the operator set; only fill in a blank one.
 			display_name = CASE WHEN models.display_name = '' THEN excluded.display_name ELSE models.display_name END,
 			-- 'enabled' is deliberately untouched: a model the operator disabled
 			-- stays exactly as they left it.
+			-- A listing that names a protocol is more current than what is stored;
+			-- one that does not leaves it alone.
+			protocol     = CASE WHEN excluded.protocol = '' THEN models.protocol ELSE excluded.protocol END,
 			last_seen_at = excluded.last_seen_at,
 			updated_at   = excluded.updated_at`)
 	if err != nil {
@@ -327,7 +353,7 @@ func (t *Scope) SyncModels(ctx context.Context, providerID int64, found []Discov
 		if strings.TrimSpace(m.ID) == "" {
 			continue
 		}
-		if _, err := stmt.ExecContext(ctx, providerID, m.ID, m.DisplayName, now, now, now); err != nil {
+		if _, err := stmt.ExecContext(ctx, providerID, m.ID, m.DisplayName, m.Protocol, now, now, now); err != nil {
 			return nil, fmt.Errorf("upsert model %q: %w", m.ID, err)
 		}
 		if existing[m.ID] {

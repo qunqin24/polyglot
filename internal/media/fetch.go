@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -43,8 +44,9 @@ const fetchTimeout = 20 * time.Second
 var allowedTypes = []string{"image/", "application/pdf", "text/plain"}
 
 type Fetcher struct {
-	client   *http.Client
-	maxBytes int64
+	client *http.Client
+	// maxBytes is atomic because the WebUI can change it.
+	maxBytes atomic.Int64
 	log      *slog.Logger
 	// deny decides whether an address may be dialled. It is a field only so
 	// the tests can point this package at a loopback server; production always
@@ -52,11 +54,17 @@ type Fetcher struct {
 	deny func(net.IP) bool
 }
 
-func NewFetcher(maxBytes int64, log *slog.Logger) *Fetcher {
-	if maxBytes <= 0 {
-		maxBytes = DefaultMaxBytes
+// SetMaxBytes changes the cap on one download.
+func (f *Fetcher) SetMaxBytes(n int64) {
+	if n <= 0 {
+		n = DefaultMaxBytes
 	}
-	f := &Fetcher{maxBytes: maxBytes, log: log, deny: blocked}
+	f.maxBytes.Store(n)
+}
+
+func NewFetcher(maxBytes int64, log *slog.Logger) *Fetcher {
+	f := &Fetcher{log: log, deny: blocked}
+	f.SetMaxBytes(maxBytes)
 
 	dialer := &net.Dialer{
 		Timeout:   5 * time.Second,
@@ -215,12 +223,13 @@ func (f *Fetcher) fetch(ctx context.Context, raw string) (mime, data string, err
 
 	// Read one byte past the cap so an oversized body is detected rather than
 	// silently truncated into a corrupt image.
-	body, err := io.ReadAll(io.LimitReader(resp.Body, f.maxBytes+1))
+	maxBytes := f.maxBytes.Load()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
 	if err != nil {
 		return "", "", fmt.Errorf("download failed")
 	}
-	if int64(len(body)) > f.maxBytes {
-		return "", "", fmt.Errorf("larger than the %d MiB limit", f.maxBytes>>20)
+	if int64(len(body)) > maxBytes {
+		return "", "", fmt.Errorf("larger than the %d MiB limit", maxBytes>>20)
 	}
 	if len(body) == 0 {
 		return "", "", fmt.Errorf("empty response")

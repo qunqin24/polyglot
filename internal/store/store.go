@@ -6,6 +6,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"fmt"
 	"io/fs"
 	"net/url"
@@ -162,6 +163,34 @@ func (s *Store) SetSetting(ctx context.Context, key, value string) error {
 		return fmt.Errorf("set setting %s: %w", key, err)
 	}
 	return nil
+}
+
+// GetSecretSetting reads a setting stored encrypted, for values that hold a
+// credential. A missing row is "".
+func (s *Store) GetSecretSetting(ctx context.Context, key string) (string, error) {
+	enc, err := s.GetSetting(ctx, key)
+	if err != nil || enc == "" {
+		return "", err
+	}
+	blob, err := base64.StdEncoding.DecodeString(enc)
+	if err != nil {
+		return "", fmt.Errorf("decode setting %s: %w", key, err)
+	}
+	plain, err := s.cipher.Decrypt(blob)
+	if err != nil {
+		return "", fmt.Errorf("decrypt setting %s: %w", key, err)
+	}
+	return plain, nil
+}
+
+// SetSecretSetting stores a setting encrypted with the same key as provider
+// credentials.
+func (s *Store) SetSecretSetting(ctx context.Context, key, value string) error {
+	blob, err := s.cipher.Encrypt(value)
+	if err != nil {
+		return fmt.Errorf("encrypt setting %s: %w", key, err)
+	}
+	return s.SetSetting(ctx, key, base64.StdEncoding.EncodeToString(blob))
 }
 
 func (s *Store) AllSettings(ctx context.Context) (map[string]string, error) {
