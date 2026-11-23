@@ -1,5 +1,7 @@
 bin/
-data/
+# The runtime data directory at the repository root only; a source folder
+# named data (web/src/components/layout/data) must not be caught by it.
+/data/
 node_modules/
 .pnpm-store/
 .eslintcache
