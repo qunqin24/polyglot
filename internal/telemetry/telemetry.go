@@ -28,11 +28,12 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
 // Config is the process-wide telemetry configuration, built by
-// internal/config from the environment.
+// cmd/polyglot from the settings stored in the database.
 type Config struct {
 	// Enabled is the master switch. With it off, requests still carry a
 	// lifecycle object — request id, retry counts and timings still reach the
@@ -78,6 +79,10 @@ type Telemetry struct {
 	cfg Config
 	log *slog.Logger
 
+	// metricsToken starts as cfg.MetricsToken and follows the WebUI, which
+	// can regenerate it while the process runs.
+	metricsToken atomic.Pointer[string]
+
 	reg    *registry
 	tracer *tracer
 
@@ -100,6 +105,7 @@ type Telemetry struct {
 // OTLP URL must not stop a gateway from serving traffic.
 func New(cfg Config, log *slog.Logger) *Telemetry {
 	t := &Telemetry{cfg: cfg, log: log}
+	t.SetMetricsToken(cfg.MetricsToken)
 	if !cfg.Enabled {
 		log.Debug("telemetry is disabled")
 		return t
@@ -114,7 +120,7 @@ func New(cfg Config, log *slog.Logger) *Telemetry {
 		switch {
 		case cfg.OTLPEndpoint == "":
 			log.Warn("tracing is enabled but no OTLP endpoint is configured; " +
-				"set OTLP_ENDPOINT to a collector, e.g. http://collector:4318")
+				"set the collector endpoint on the WebUI settings page, e.g. http://collector:4318")
 		default:
 			reg := t.reg
 			if reg == nil {
@@ -187,11 +193,24 @@ func (t *Telemetry) MetricsEnabled() bool { return t != nil && t.reg != nil }
 // network" fallback, because X-Forwarded-For is honoured on this server and a
 // source-address rule would be spoofable.
 func (t *Telemetry) ScrapeAuthorized(r *http.Request) bool {
-	if !t.MetricsEnabled() || t.cfg.MetricsToken == "" {
+	if !t.MetricsEnabled() {
+		return false
+	}
+	token := t.metricsToken.Load()
+	if token == nil || *token == "" {
 		return false
 	}
 	presented := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer"))
-	return subtle.ConstantTimeCompare([]byte(presented), []byte(t.cfg.MetricsToken)) == 1
+	return subtle.ConstantTimeCompare([]byte(presented), []byte(*token)) == 1
+}
+
+// SetMetricsToken replaces the scrape credential. The old one stops working
+// on the next request.
+func (t *Telemetry) SetMetricsToken(token string) {
+	if t == nil {
+		return
+	}
+	t.metricsToken.Store(&token)
 }
 
 // WriteMetrics renders the exposition. Callers are responsible for

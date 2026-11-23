@@ -83,6 +83,19 @@ func (s *Store) ReplaceCatalog(ctx context.Context, snap *pricing.Snapshot, sour
 			return fmt.Errorf("insert catalog price %q: %w", e.ID, err)
 		}
 	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM model_makers`); err != nil {
+		return fmt.Errorf("clear model makers: %w", err)
+	}
+	makerStmt, err := tx.PrepareContext(ctx, `INSERT INTO model_makers (model_id, maker, name) VALUES (?, ?, ?)`)
+	if err != nil {
+		return fmt.Errorf("prepare maker insert: %w", err)
+	}
+	defer makerStmt.Close()
+	for id, maker := range snap.Makers {
+		if _, err := makerStmt.ExecContext(ctx, id, maker, snap.Names[id]); err != nil {
+			return fmt.Errorf("insert maker of %q: %w", id, err)
+		}
+	}
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO price_catalog_meta (id, version, source, fetched_at) VALUES (1, ?, ?, ?)
 		 ON CONFLICT (id) DO UPDATE SET version = excluded.version,
@@ -108,7 +121,16 @@ func (s *Store) LoadEmbeddedCatalog(ctx context.Context, snap *pricing.Snapshot)
 		return err
 	}
 	if cur != nil && cur.Version >= snap.Version {
-		return nil
+		// A catalog loaded before names existed is refreshed once from a
+		// binary that has them, even at the same version: otherwise every
+		// model shows its id until someone presses refresh.
+		var named int
+		if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM model_makers WHERE name != ''`).Scan(&named); err != nil {
+			return fmt.Errorf("count model names: %w", err)
+		}
+		if named > 0 || len(snap.Names) == 0 || cur.Version > snap.Version {
+			return nil
+		}
 	}
 	return s.ReplaceCatalog(ctx, snap, "embedded")
 }
@@ -144,6 +166,33 @@ func (s *Store) CatalogPrices(ctx context.Context) (map[string]pricing.Rates, er
 			}
 		}
 		out[id] = r
+	}
+	return out, rows.Err()
+}
+
+// CatalogModel is what the catalog knows about a model besides its price.
+type CatalogModel struct {
+	Maker string
+	Name  string
+}
+
+// CatalogModels reads who made each model and what it is called, keyed by
+// normalised model id.
+func (s *Store) CatalogModels(ctx context.Context) (map[string]CatalogModel, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT model_id, maker, name FROM model_makers`)
+	if err != nil {
+		return nil, fmt.Errorf("read model catalog: %w", err)
+	}
+	defer rows.Close()
+
+	out := map[string]CatalogModel{}
+	for rows.Next() {
+		var id string
+		var m CatalogModel
+		if err := rows.Scan(&id, &m.Maker, &m.Name); err != nil {
+			return nil, fmt.Errorf("read model catalog: %w", err)
+		}
+		out[id] = m
 	}
 	return out, rows.Err()
 }

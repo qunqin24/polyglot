@@ -4,10 +4,12 @@ import { api, type Model, type ModelOffer, type Provider } from "@/lib/api";
 import { errorMessage } from "@/lib/hooks";
 import { useT } from "@/lib/i18n";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Spinner } from "@/components/ui/misc";
-import { useToast } from "@/components/ui/toast";
-import { Dialog } from "@/components/ui/dialog";
+import { Input } from "@/components/kit/input";
+import { LoadingButton } from "@/components/kit/loading-button";
+import { ListRowsSkeleton, SkeletonLine } from "@/components/kit/skeletons";
+import { isAbort, useCancellable, useSlowHint } from "@/lib/hooks";
+import { useToast } from "@/components/kit/toast";
+import { Dialog } from "@/components/kit/dialog";
 import { ModelPicker } from "@/components/model-picker";
 
 /**
@@ -26,6 +28,7 @@ export function ProviderModels({
   picked,
   onPickedChange,
   protocol,
+  vendor = "",
   baseURL,
   apiKey,
   headers,
@@ -39,6 +42,7 @@ export function ProviderModels({
   picked: Set<string>;
   onPickedChange: (next: Set<string>) => void;
   protocol: Provider["protocol"];
+  vendor?: string;
   baseURL: string;
   apiKey: string | null;
   headers: Record<string, string>;
@@ -54,6 +58,9 @@ export function ProviderModels({
   const [current, setCurrent] = React.useState<Model[]>([]);
   const [offer, setOffer] = React.useState<ModelOffer | null>(null);
   const [listing, setListing] = React.useState(false);
+  const [loadingCurrent, setLoadingCurrent] = React.useState(false);
+  const discover = useCancellable();
+  const listingSlow = useSlowHint(listing);
   const [manual, setManual] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   // The picker opens in its own dialog. `draft` is what is ticked inside it and
@@ -68,11 +75,14 @@ export function ProviderModels({
       setCurrent([]);
       return;
     }
+    setLoadingCurrent(true);
     try {
       const res = await api.models({ provider_id: String(providerID), limit: 500 });
       setCurrent(res.models);
     } catch (e) {
       toast(errorMessage(e), "error");
+    } finally {
+      setLoadingCurrent(false);
     }
   }, [providerID, toast]);
 
@@ -86,17 +96,22 @@ export function ProviderModels({
     setDraft(new Set());
     setListing(true);
     try {
-      const result = await api.discoverModels({
-        id: providerID,
-        protocol,
-        base_url: baseURL,
-        api_key: apiKey,
-        headers,
-        timeout_secs: timeoutSecs,
-      });
+      const result = await api.discoverModels(
+        {
+          id: providerID,
+          protocol,
+          vendor,
+          base_url: baseURL,
+          api_key: apiKey,
+          headers,
+          timeout_secs: timeoutSecs,
+        },
+        discover.start(),
+      );
       setOffer(result);
     } catch (e) {
-      toast(errorMessage(e), "error");
+      // A cancelled request closes the dialog quietly; a failure is said.
+      if (!isAbort(e)) toast(errorMessage(e), "error");
       setPickerOpen(false);
     } finally {
       setListing(false);
@@ -199,11 +214,20 @@ export function ProviderModels({
             onClick={() => void openPicker()}
             disabled={listing || busy || !baseURL}
           >
-            {listing ? <Spinner /> : <ListPlus />}
+            <ListPlus />
             {t("providers.fetchModels")}
           </Button>
         )}
       </div>
+
+      {loadingCurrent && chips.length === 0 && (
+        <div className="flex flex-wrap gap-1.5" role="status" aria-busy="true">
+          <span className="sr-only">{t("common.loading")}</span>
+          {["w-28", "w-36", "w-24"].map((w) => (
+            <SkeletonLine key={w} className={`h-6 rounded-md ${w}`} />
+          ))}
+        </div>
+      )}
 
       {chips.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
@@ -256,7 +280,11 @@ export function ProviderModels({
 
       <Dialog
         open={pickerOpen}
-        onOpenChange={(o) => !o && setPickerOpen(false)}
+        onOpenChange={(o) => {
+          if (o) return;
+          discover.cancel();
+          setPickerOpen(false);
+        }}
         className="max-w-2xl"
         title={t("models.pickerTitle")}
         description={t("models.pickerDescription")}
@@ -265,16 +293,21 @@ export function ProviderModels({
             <Button type="button" variant="outline" onClick={() => setPickerOpen(false)} disabled={busy}>
               {t("common.cancel")}
             </Button>
-            <Button type="button" onClick={() => void confirmPicker()} disabled={busy || draft.size === 0}>
-              {busy && <Spinner />}
+            <LoadingButton type="button" onClick={() => void confirmPicker()} busy={busy} disabled={draft.size === 0}>
               {t("models.pickerAdd", { count: draft.size })}
-            </Button>
+            </LoadingButton>
           </>
         }
       >
         {listing && (
-          <div className="flex justify-center py-8">
-            <Spinner className="text-muted-foreground" />
+          <div className="min-h-48 space-y-3" role="status" aria-busy="true">
+            <p className="flex flex-wrap items-center gap-x-3 text-sm text-muted-foreground">
+              <span>{listingSlow ? t("common.slowHint") : t("providers.fetchingModels")}</span>
+              <button type="button" onClick={discover.cancel} className="text-xs underline underline-offset-2 hover:text-foreground">
+                {t("common.cancel")}
+              </button>
+            </p>
+            <ListRowsSkeleton rows={5} />
           </div>
         )}
         {offer && !offer.ok && (

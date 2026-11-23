@@ -6,10 +6,12 @@ import { useT } from "@/lib/i18n";
 import { formatTime } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input, Label } from "@/components/ui/input";
-import { ErrorBanner, Select, Spinner, Switch } from "@/components/ui/misc";
-import { ConfirmDialog } from "@/components/ui/dialog";
-import { useToast } from "@/components/ui/toast";
+import { Input, Label } from "@/components/kit/input";
+import { ErrorBanner, Select, Switch } from "@/components/kit/misc";
+import { LoadingButton } from "@/components/kit/loading-button";
+import { FormSkeleton, ListRowsSkeleton, LoadingGate } from "@/components/kit/skeletons";
+import { ConfirmDialog } from "@/components/kit/dialog";
+import { useToast } from "@/components/kit/toast";
 
 export function ContentLogSettings() {
   const t = useT();
@@ -24,25 +26,27 @@ export function ContentLogSettings() {
   const [name, setName] = React.useState("");
   const [secret, setSecret] = React.useState("");
   const [deleting, setDeleting] = React.useState<LogKey | null>(null);
-  React.useEffect(() => { if (data) setSettings(data.settings); }, [data]);
+  // Only the first load fills the form. A later re-read (after adding or
+  // revoking a key) must not overwrite what is being edited.
+  React.useEffect(() => { if (data && settings === null) setSettings(data.settings); }, [data, settings]);
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
     if (!settings) return;
     setBusy(true); setError("");
-    try { await api.saveContentLogSettings(settings); toast(t("contentLogs.saved")); reload(); }
+    try { setSettings(await api.saveContentLogSettings(settings)); toast(t("contentLogs.saved")); void reload(); }
     catch (e) { setError(errorMessage(e)); }
     finally { setBusy(false); }
   }
   async function create(e: React.FormEvent) {
     e.preventDefault(); setBusy(true); setError("");
-    try { const result = await api.createLogKey(name.trim()); setSecret(result.secret); setName(""); reload(); }
+    try { const result = await api.createLogKey(name.trim()); setSecret(result.secret); setName(""); void reload(); }
     catch (e) { setError(errorMessage(e)); }
     finally { setBusy(false); }
   }
   async function remove(key: LogKey) {
-    setDeleting(null); setBusy(true); setError("");
-    try { await api.deleteLogKey(key.id); reload(); }
+    setBusy(true); setError("");
+    try { await api.deleteLogKey(key.id); void reload(); }
     catch (e) { setError(errorMessage(e)); }
     finally { setBusy(false); }
   }
@@ -51,8 +55,14 @@ export function ContentLogSettings() {
     catch { setError(t("contentLogs.copyFailed")); }
   }
 
-  if (loadError) return <ErrorBanner message={loadError} />;
-  if (!settings || !data) return <Spinner />;
+  if (loadError && !data) return <ErrorBanner message={loadError} onRetry={() => void reload()} />;
+  if (!settings || !data) {
+    return (
+      <LoadingGate loading skeleton={<div className="flex flex-col gap-4"><Card><CardContent className="pt-6"><FormSkeleton fields={3} /></CardContent></Card><Card><CardContent className="pt-6"><ListRowsSkeleton rows={3} /></CardContent></Card></div>}>
+        {null}
+      </LoadingGate>
+    );
+  }
   return (
     <div className="flex flex-col gap-4">
       {error && <ErrorBanner message={error} />}
@@ -69,7 +79,7 @@ export function ContentLogSettings() {
               <Select id="content-retention" value={String(settings.retention_days)} disabled={busy} onValueChange={(v) => { if (v === "3" || v === "7" || v === "30") setSettings({ ...settings, retention_days: Number(v) as 3 | 7 | 30 }); }} options={[3, 7, 30].map((days) => ({ value: String(days), label: t("settings.retentionDays", { days }) }))} />
             </div>
             <p className="text-xs text-muted-foreground">{t("contentLogs.retentionHint")}</p>
-            <div><Button type="submit" disabled={busy}>{busy && <Spinner />}{t("common.save")}</Button></div>
+            <div><LoadingButton type="submit" busy={busy}>{t("common.save")}</LoadingButton></div>
           </form>
         </CardContent>
       </Card>
@@ -94,7 +104,7 @@ export function ContentLogSettings() {
           <div className="flex flex-col gap-2 text-sm"><p>{t("contentLogs.agentHint")}</p><code className="break-all text-xs">GET {window.location.origin}/api/logs/v1/</code><code className="break-all text-xs">Authorization: Bearer &lt;LOG_KEY&gt;</code></div>
         </CardContent>
       </Card>
-      <ConfirmDialog open={deleting !== null} onOpenChange={(o) => !o && setDeleting(null)} title={t("contentLogs.revokeTitle")} description={t("contentLogs.revokeDescription")} onConfirm={() => deleting && void remove(deleting)} />
+      <ConfirmDialog open={deleting !== null} onOpenChange={(o) => !o && setDeleting(null)} title={t("contentLogs.revokeTitle")} description={t("contentLogs.revokeDescription")} onConfirm={() => (deleting ? remove(deleting) : undefined)} />
     </div>
   );
 }

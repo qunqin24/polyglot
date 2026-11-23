@@ -1,30 +1,28 @@
 import * as React from "react";
 import { Boxes, Info } from "lucide-react";
 import { api, type ModelStat, type Model, type Provider } from "@/lib/api";
-import { errorMessage, useAsync } from "@/lib/hooks";
+import { useAsync } from "@/lib/hooks";
+import { useOptimisticFlags } from "@/lib/optimistic";
 import { useT } from "@/lib/i18n";
-import { formatDuration, formatNumber, formatRelative } from "@/lib/utils";
-import { PageHeader } from "@/components/layout";
+import { cn, formatDuration, formatNumber, formatRelative } from "@/lib/utils";
+import { PageHeader } from "@/components/layout/page-header";
 import { Aliases } from "@/pages/aliases";
 import { Card, CardContent } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
+import { Input } from "@/components/kit/input";
 import {
   Badge,
   EmptyState,
   ErrorBanner,
   Select,
-  Spinner,
   Switch,
-  Table,
   Tabs,
   TabsContent,
   TabsList,
   TabsTrigger,
-  Td,
-  Th,
-  Tr,
-} from "@/components/ui/misc";
-import { useToast } from "@/components/ui/toast";
+} from "@/components/kit/misc";
+import { ModelIcon } from "@/components/model-icon";
+import { SaveStatus } from "@/components/kit/save-status";
+import { CardGridSkeleton, LoadingGate, SkeletonLine } from "@/components/kit/skeletons";
 
 // The Models page shows the real models each provider offers. Aliases are a
 // second tab, because they are an optional convenience rather than a step
@@ -54,8 +52,6 @@ export function Models() {
 
 function Registry({ providers }: { providers: Provider[] }) {
   const t = useT();
-  const { toast } = useToast();
-
   const [providerID, setProviderID] = React.useState("");
   const [searchInput, setSearchInput] = React.useState("");
   const [search, setSearch] = React.useState("");
@@ -65,9 +61,12 @@ function Registry({ providers }: { providers: Provider[] }) {
     return () => clearTimeout(id);
   }, [searchInput]);
 
-  const { data, loading, error, reload } = useAsync(
+  // keepPrevious: a new filter keeps the cards on screen, dimmed, until the
+  // answer arrives, instead of replacing the grid with a spinner.
+  const { data, initialLoading, refreshing, error, reload } = useAsync(
     () => api.models({ provider_id: providerID, search, limit: 500 }),
     ["models", providerID, search, 500],
+    { keepPrevious: true },
   );
   // Loaded separately from the list: this is an aggregate over the request
   // log, and it must never be what decides whether the page appears.
@@ -88,14 +87,10 @@ function Registry({ providers }: { providers: Provider[] }) {
     statsByKey.get(`${m.provider_name}\u0000${m.upstream_model_id}`);
 
 
-  async function toggle(m: Model, enabled: boolean) {
-    try {
-      await api.updateModel(m.id, m.display_name, enabled);
-      reload();
-    } catch (e) {
-      toast(errorMessage(e), "error");
-    }
-  }
+  const flags = useOptimisticFlags<number>((id, enabled) => {
+    const m = data?.models.find((x) => x.id === id);
+    return m ? api.updateModel(m.id, m.display_name, enabled) : Promise.resolve();
+  }, reload);
 
   const models = data?.models ?? [];
   const filtered = providerID !== "" || search !== "";
@@ -133,15 +128,12 @@ function Registry({ providers }: { providers: Provider[] }) {
         </div>
       </div>
 
-      <ErrorBanner message={error} />
+      <ErrorBanner message={error} onRetry={() => void reload()} />
 
-      <Card>
-        <CardContent className="p-0">
-          {loading && !data ? (
-            <div className="flex justify-center py-12">
-              <Spinner className="text-muted-foreground" />
-            </div>
-          ) : models.length === 0 ? (
+      <LoadingGate loading={initialLoading} skeleton={<CardGridSkeleton count={8} />}>
+      {models.length === 0 ? (
+        <Card>
+          <CardContent className="p-0">
             <EmptyState
               icon={Boxes}
               title={filtered ? t("models.emptyFiltered") : t("models.empty")}
@@ -153,91 +145,162 @@ function Registry({ providers }: { providers: Provider[] }) {
                     : t("models.emptyHint")
               }
             />
-          ) : (
-            <Table>
-              <thead>
-                <Tr>
-                  <Th className="pl-5">{t("models.modelID")}</Th>
-                  <Th>{t("common.provider")}</Th>
-                  <Th className="text-right">{t("models.requests24h")}</Th>
-                  <Th className="text-right">{t("models.successRate")}</Th>
-                  <Th className="hidden text-right sm:table-cell">{t("models.ttftP95")}</Th>
-                  <Th className="hidden text-right sm:table-cell">{t("models.tpsMedian")}</Th>
-                  <Th className="hidden text-right md:table-cell">{t("models.tokens")}</Th>
-                  <Th className="hidden text-right lg:table-cell">{t("models.cacheHit")}</Th>
-                  <Th className="hidden lg:table-cell">{t("models.lastSeen")}</Th>
-                  <Th className="pr-5">{t("common.enabled")}</Th>
-                </Tr>
-              </thead>
-              <tbody>
-                {models.map((m) => (
-                  <Tr key={m.id}>
-                    <Td className="pl-5">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-mono text-xs font-medium">{m.upstream_model_id}</span>
-                        {m.ambiguous && (
-                          <span
-                            title={t("models.ambiguousHint", {
-                              qualified: `${m.provider_name}::${m.upstream_model_id}`,
-                            })}
-                          >
-                            <Badge variant="warning">
-                              <Info className="size-3" /> {t("models.ambiguous")}
-                            </Badge>
-                          </span>
-                        )}
-                      </div>
-                      {m.display_name && m.display_name !== m.upstream_model_id && (
-                        <p className="mt-0.5 text-xs text-muted-foreground">{m.display_name}</p>
-                      )}
-                    </Td>
-                    <Td>
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-sm">{m.provider_name}</span>
-                        <Badge variant="accent">{m.protocol}</Badge>
-                      </div>
-                    </Td>
-                    <ModelStatCells stat={statOf(m)} />
-                    <Td className="hidden text-xs text-muted-foreground lg:table-cell">
-                      {formatRelative(m.last_seen_at, {
-                        never: t("common.never"),
-                        justNow: t("common.justNow"),
-                      })}
-                    </Td>
-                    <Td className="pr-5">
-                      <Switch checked={m.enabled} onCheckedChange={(v) => void toggle(m, v)} />
-                    </Td>
-                  </Tr>
-                ))}
-              </tbody>
-            </Table>
+          </CardContent>
+        </Card>
+      ) : (
+        <div
+          aria-busy={refreshing || undefined}
+          className={cn(
+            "grid gap-4 transition-opacity duration-200 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4",
+            refreshing && "opacity-60",
           )}
-        </CardContent>
-      </Card>
-
-
-
+        >
+          {models.map((m) => (
+            <ModelCard
+              key={m.id}
+              model={{ ...m, enabled: flags.value(m.id, m.enabled) }}
+              stat={statOf(m)}
+              statsLoading={stats.initialLoading}
+              saveStatus={
+                <SaveStatus state={flags.status(m.id)} onRetry={() => flags.retry(m.id)} />
+              }
+              onToggle={(v) => void flags.toggle(m.id, v)}
+            />
+          ))}
+        </div>
+      )}
+      </LoadingGate>
     </>
   );
 }
 
-// ModelStatCells renders the four numbers that say how a model has actually
-// behaved. Every one of them is a dash when it could not be measured, never a
-// zero — a zero reads as a measurement, and "no data" is a different answer.
-function ModelStatCells({ stat }: { stat?: ModelStat }) {
+function ModelCard({
+  model: m,
+  stat,
+  statsLoading,
+  saveStatus,
+  onToggle,
+}: {
+  model: Model;
+  stat?: ModelStat;
+  statsLoading?: boolean;
+  saveStatus?: React.ReactNode;
+  onToggle: (enabled: boolean) => void;
+}) {
   const t = useT();
+  return (
+    <div className="flex flex-col rounded-xl border bg-card p-4 text-card-foreground shadow-xs transition-colors hover:border-foreground/20">
+      <div className="flex items-start gap-3">
+        <ModelIcon
+          id={m.upstream_model_id}
+          maker={m.maker}
+          className={cn(!m.enabled && "opacity-50 grayscale")}
+        />
+        <div className="min-w-0 flex-1">
+          <p
+            className={cn(
+              "font-mono text-sm leading-5 font-medium break-all",
+              !m.enabled && "text-muted-foreground",
+            )}
+          >
+            {m.upstream_model_id}
+          </p>
+          {m.display_name && m.display_name !== m.upstream_model_id && (
+            <p className="mt-0.5 truncate text-xs text-muted-foreground" title={m.display_name}>
+              {m.display_name}
+            </p>
+          )}
+        </div>
+        <Switch
+          checked={m.enabled}
+          onCheckedChange={onToggle}
+          aria-label={t("common.enabled")}
+          className="mt-0.5"
+        />
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-center gap-1.5">
+        <span className="text-xs text-muted-foreground">{m.provider_name}</span>
+        <Badge variant="accent">{m.protocol}</Badge>
+        <span className="ms-auto">{saveStatus}</span>
+        {m.ambiguous && (
+          <span
+            title={t("models.ambiguousHint", {
+              qualified: `${m.provider_name}::${m.upstream_model_id}`,
+            })}
+          >
+            <Badge variant="warning">
+              <Info className="size-3" /> {t("models.ambiguous")}
+            </Badge>
+          </span>
+        )}
+      </div>
+
+      <ModelStats stat={stat} loading={statsLoading} />
+
+      <p className="mt-auto pt-3 text-xs text-muted-foreground">
+        {t("models.lastSeen")}{" · "}
+        {formatRelative(m.last_seen_at, {
+          never: t("common.never"),
+          justNow: t("common.justNow"),
+        })}
+      </p>
+    </div>
+  );
+}
+
+function Metric({
+  label,
+  value,
+  title,
+  className,
+}: {
+  label: string;
+  value: React.ReactNode;
+  title?: string;
+  className?: string;
+}) {
+  return (
+    <div className="min-w-0" title={title}>
+      <dt className="truncate text-[11px] text-muted-foreground">{label}</dt>
+      <dd className={cn("mt-0.5 truncate text-sm font-medium tabular-nums", className)}>{value}</dd>
+    </div>
+  );
+}
+
+// ModelStats shows how a model has actually behaved. Every number is a dash
+// when it could not be measured, never a zero — a zero reads as a
+// measurement, and "no data" is a different answer.
+function ModelStats({ stat, loading }: { stat?: ModelStat; loading?: boolean }) {
+  const t = useT();
+  const grid = "mt-4 grid grid-cols-3 gap-x-3 gap-y-3 border-t pt-3";
+  const dash = "text-muted-foreground";
+
+  // Still waiting for the numbers: a dash here would say "no traffic", which
+  // is a different answer, so the slots show placeholders instead.
+  if (!stat && loading) {
+    return (
+      <dl className={grid} aria-busy="true">
+        {Array.from({ length: 6 }, (_, i) => (
+          <div key={i} className="space-y-2 pt-0.5">
+            <SkeletonLine className="h-2.5 w-3/4" />
+            <SkeletonLine className="h-3.5 w-1/2" />
+          </div>
+        ))}
+      </dl>
+    );
+  }
+
   if (!stat) {
     return (
-      <>
-        <Td className="text-right text-xs text-muted-foreground" title={t("models.noTraffic")}>
-          —
-        </Td>
-        <Td className="text-right text-muted-foreground">—</Td>
-        <Td className="hidden text-right text-muted-foreground sm:table-cell">—</Td>
-        <Td className="hidden text-right text-muted-foreground sm:table-cell">—</Td>
-        <Td className="hidden text-right text-muted-foreground md:table-cell">—</Td>
-        <Td className="hidden text-right text-muted-foreground lg:table-cell">—</Td>
-      </>
+      <dl className={grid} title={t("models.noTraffic")}>
+        <Metric label={t("models.requests24h")} value="—" className={dash} />
+        <Metric label={t("models.successRate")} value="—" className={dash} />
+        <Metric label={t("models.ttftP95")} value="—" className={dash} />
+        <Metric label={t("models.tpsMedian")} value="—" className={dash} />
+        <Metric label={t("models.tokens")} value="—" className={dash} />
+        <Metric label={t("models.cacheHit")} value="—" className={dash} />
+      </dl>
     );
   }
 
@@ -246,6 +309,9 @@ function ModelStatCells({ stat }: { stat?: ModelStat }) {
   const speedTitle =
     stat.streamed > 0 ? t("models.speedSample", { n: String(stat.streamed) }) : t("models.speedNone");
 
+  // Readable units on the card, the exact millisecond on hover. The stored
+  // value is whole milliseconds, and rendering it as "2.13 s" rounds to the
+  // nearest 10 — fine for reading, not for comparing two close providers.
   const ttftTitle =
     stat.ttft_p95_ms !== null
       ? t("models.ttftExact", { ms: String(stat.ttft_p95_ms), sample: speedTitle })
@@ -268,7 +334,8 @@ function ModelStatCells({ stat }: { stat?: ModelStat }) {
 
   // The hit rate is a share of tokens, not of requests: one long cached prompt
   // and one short uncached one is not a 50% hit, and tokens are what the bill
-  // is denominated in.
+  // is denominated in. 0% is a real answer — input was measured and none of it
+  // was cached — while a dash means no input was reported at all.
   const cacheTitle =
     stat.cache_hit_rate !== null
       ? t("models.cacheHitDetail", {
@@ -278,47 +345,42 @@ function ModelStatCells({ stat }: { stat?: ModelStat }) {
       : t("models.cacheHitNone");
 
   return (
-    <>
-      <Td className="text-right tabular-nums text-muted-foreground">{stat.requests}</Td>
-      <Td
-        className="text-right tabular-nums"
+    <dl className={grid}>
+      <Metric label={t("models.requests24h")} value={formatNumber(stat.requests)} />
+      <Metric
+        label={t("models.successRate")}
+        value={`${rate}%`}
         title={stat.top_error ? t("models.topError", { kind: stat.top_error }) : undefined}
-      >
-        <span className={rate < 100 ? "text-destructive" : "text-muted-foreground"}>{rate}%</span>
-      </Td>
-      {/* Readable units in the column, the exact millisecond on hover. The
-          stored value is whole milliseconds, and rendering it as "2.13 s"
-          rounds to the nearest 10 — fine for reading, not for comparing two
-          close providers, so the precise number stays one hover away. */}
-      <Td
-        className="hidden text-right tabular-nums text-muted-foreground sm:table-cell"
+        className={rate < 100 ? "text-destructive" : undefined}
+      />
+      <Metric
+        label={t("models.ttftP95")}
+        value={stat.ttft_p95_ms !== null ? formatDuration(stat.ttft_p95_ms) : "—"}
         title={ttftTitle}
-      >
-        {stat.ttft_p95_ms !== null ? formatDuration(stat.ttft_p95_ms) : "—"}
-      </Td>
-      <Td
-        className="hidden text-right tabular-nums text-muted-foreground sm:table-cell"
+        className={stat.ttft_p95_ms === null ? dash : undefined}
+      />
+      <Metric
+        label={t("models.tpsMedian")}
+        value={stat.tps_median !== null ? stat.tps_median.toFixed(0) : "—"}
         title={speedTitle}
-      >
-        {stat.tps_median !== null ? stat.tps_median.toFixed(0) : "—"}
-      </Td>
-      <Td
-        className="hidden text-right tabular-nums text-muted-foreground md:table-cell"
+        className={stat.tps_median === null ? dash : undefined}
+      />
+      <Metric
+        label={t("models.tokens")}
+        value={
+          stat.input_tokens + stat.output_tokens > 0
+            ? `${formatNumber(stat.input_tokens)} / ${formatNumber(stat.output_tokens)}`
+            : "—"
+        }
         title={tokenTitle}
-      >
-        {stat.input_tokens + stat.output_tokens > 0
-          ? `${formatNumber(stat.input_tokens)} / ${formatNumber(stat.output_tokens)}`
-          : "—"}
-      </Td>
-      {/* 0% is a real answer here — input was measured and none of it was
-          cached. A dash means no input was reported at all, which is not the
-          same thing and must not read as a cache that never hit. */}
-      <Td
-        className="hidden text-right tabular-nums text-muted-foreground lg:table-cell"
+        className={stat.input_tokens + stat.output_tokens > 0 ? undefined : dash}
+      />
+      <Metric
+        label={t("models.cacheHit")}
+        value={stat.cache_hit_rate !== null ? `${Math.round(stat.cache_hit_rate * 100)}%` : "—"}
         title={cacheTitle}
-      >
-        {stat.cache_hit_rate !== null ? `${Math.round(stat.cache_hit_rate * 100)}%` : "—"}
-      </Td>
-    </>
+        className={stat.cache_hit_rate === null ? dash : undefined}
+      />
+    </dl>
   );
 }

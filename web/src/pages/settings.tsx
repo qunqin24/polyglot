@@ -1,7 +1,10 @@
 import * as React from "react";
 import { ContentLogSettings } from "@/components/content-log-settings";
+import { RuntimeSettingsForm } from "@/components/runtime-settings";
 import { api } from "@/lib/api";
-import { errorMessage, useTheme, type Theme } from "@/lib/hooks";
+import { errorMessage, useDelayedFlag } from "@/lib/hooks";
+import { LoadingButton } from "@/components/kit/loading-button";
+import { useTheme, type Theme } from "@/context/theme-provider";
 import { useT, useI18n, LOCALES, type Locale } from "@/lib/i18n";
 import {
   browserTimeZone,
@@ -11,11 +14,11 @@ import {
   timeZoneNames,
   timeZoneOffsetLabel,
 } from "@/lib/utils";
-import { useSession } from "@/App";
-import { PageHeader } from "@/components/layout";
+import { useSession } from "@/lib/session";
+import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Field, Input } from "@/components/ui/input";
+import { Field, Input } from "@/components/kit/input";
 import {
   ErrorBanner,
   Select,
@@ -24,8 +27,8 @@ import {
   TabsContent,
   TabsList,
   TabsTrigger,
-} from "@/components/ui/misc";
-import { useToast } from "@/components/ui/toast";
+} from "@/components/kit/misc";
+import { useToast } from "@/components/kit/toast";
 import { UpdateSettings } from "@/components/update-notice";
 
 export function Settings() {
@@ -42,6 +45,7 @@ export function Settings() {
         <TabsList className="mb-4">
           <TabsTrigger value="general">{t("settings.tabGeneral")}</TabsTrigger>
           <TabsTrigger value="instance">{t("settings.tabInstance")}</TabsTrigger>
+          <TabsTrigger value="runtime">{t("runtime.tab")}</TabsTrigger>
           <TabsTrigger value="logging">{t("contentLogs.tab")}</TabsTrigger>
           <TabsTrigger value="account">{t("settings.tabAccount")}</TabsTrigger>
           <TabsTrigger value="endpoints">{t("settings.tabEndpoints")}</TabsTrigger>
@@ -90,15 +94,6 @@ export function Settings() {
               <dl className="space-y-3 text-sm">
                 <Row label={t("settings.version")} value={me.version} mono />
                 <Row label={t("settings.dataDir")} value={me.data_dir} mono />
-                <Row label={t("settings.upstreamTimeout")} value={me.upstream_timeout} mono />
-                <Row
-                  label={t("settings.logRetention")}
-                  value={
-                    me.log_retention > 0
-                      ? t("settings.retentionDays", { days: me.log_retention })
-                      : t("settings.retentionForever")
-                  }
-                />
                 <Row
                   label={t("settings.droppedLogs")}
                   value={me.dropped_logs > 0 ? String(me.dropped_logs) : t("common.none")}
@@ -111,6 +106,10 @@ export function Settings() {
               </div>
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="runtime">
+          <RuntimeSettingsForm />
         </TabsContent>
 
         <TabsContent value="logging"><ContentLogSettings /></TabsContent>
@@ -232,9 +231,9 @@ function PasswordCard({ onChanged }: { onChanged: () => void }) {
             />
           </Field>
           <ErrorBanner message={error} />
-          <Button type="submit" disabled={busy}>
-            {busy && <Spinner />} {t("settings.changePassword")}
-          </Button>
+          <LoadingButton type="submit" busy={busy}>
+            {t("settings.changePassword")}
+          </LoadingButton>
         </form>
       </CardContent>
     </Card>
@@ -262,6 +261,7 @@ function TimezoneField({ current, onSaved }: { current: string; onSaved: () => v
   const t = useT();
   const { toast } = useToast();
   const [saving, setSaving] = React.useState(false);
+  const showSaving = useDelayedFlag(saving);
   const options = React.useMemo(() => timezoneOptions(current), [current]);
   const detected = React.useMemo(browserTimeZone, []);
 
@@ -290,7 +290,8 @@ function TimezoneField({ current, onSaved }: { current: string; onSaved: () => v
     <Field label={t("settings.timezone")} hint={t("settings.timezoneHint")}>
       <div className="flex items-center gap-2">
         <Select value={current} onValueChange={(v) => void save(v)} disabled={saving} options={options} />
-        {saving && <Spinner className="size-4 text-muted-foreground" />}
+        {/* A fixed slot, so the spinner arriving does not push the field. */}
+        <span className="size-4 shrink-0">{showSaving && <Spinner className="text-muted-foreground" />}</span>
       </div>
       {current !== detected && isValidTimeZone(detected) && (
         <Button

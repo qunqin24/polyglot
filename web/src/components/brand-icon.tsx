@@ -2,11 +2,13 @@ import anthropic from "@lobehub/icons-static-svg/icons/anthropic.svg";
 import deepseek from "@lobehub/icons-static-svg/icons/deepseek-color.svg";
 import gemini from "@lobehub/icons-static-svg/icons/gemini-color.svg";
 import groq from "@lobehub/icons-static-svg/icons/groq.svg";
+import opencode from "@lobehub/icons-static-svg/icons/opencode.svg";
 import ollama from "@lobehub/icons-static-svg/icons/ollama.svg";
 import openai from "@lobehub/icons-static-svg/icons/openai.svg";
 import openrouter from "@lobehub/icons-static-svg/icons/openrouter.svg";
 import siliconcloud from "@lobehub/icons-static-svg/icons/siliconcloud-color.svg";
 import vertexai from "@lobehub/icons-static-svg/icons/vertexai-color.svg";
+import terminal from "@/assets/brand/terminal.svg";
 import { cn } from "@/lib/utils";
 
 /**
@@ -25,6 +27,10 @@ const BRANDS = {
   openrouter: { src: openrouter, mono: true },
   groq: { src: groq, mono: true },
   ollama: { src: ollama, mono: true },
+  opencode: { src: opencode, mono: true },
+  // The icon package has no Command Code mark, and borrowing another
+  // product's would misname it, so a plain terminal glyph stands in.
+  commandcode: { src: terminal, mono: true },
   gemini: { src: gemini, mono: false },
   vertexai: { src: vertexai, mono: false },
   deepseek: { src: deepseek, mono: false },
@@ -46,14 +52,30 @@ export type BrandName = keyof typeof BRANDS;
  */
 export function BrandIcon({ name, className }: { name: BrandName; className?: string }) {
   const brand = BRANDS[name];
-  if (brand.mono) {
+  return <SvgMark src={brand.src} mono={brand.mono} className={className} />;
+}
+
+/**
+ * Draws one SVG file from the icon package. `mono` marks are masked and
+ * filled with the current text colour; coloured ones are a plain <img>.
+ */
+export function SvgMark({
+  src,
+  mono,
+  className,
+}: {
+  src: string;
+  mono: boolean;
+  className?: string;
+}) {
+  if (mono) {
     return (
       <span
         aria-hidden
         className={cn("inline-block size-4 shrink-0 bg-current", className)}
         style={{
-          maskImage: `url("${brand.src}")`,
-          WebkitMaskImage: `url("${brand.src}")`,
+          maskImage: `url("${src}")`,
+          WebkitMaskImage: `url("${src}")`,
           maskSize: "contain",
           WebkitMaskSize: "contain",
           maskRepeat: "no-repeat",
@@ -64,5 +86,5 @@ export function BrandIcon({ name, className }: { name: BrandName; className?: st
       />
     );
   }
-  return <img src={brand.src} alt="" aria-hidden className={cn("size-4 shrink-0", className)} />;
+  return <img src={src} alt="" aria-hidden className={cn("size-4 shrink-0", className)} />;
 }

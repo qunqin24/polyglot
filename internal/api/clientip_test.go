@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/qunqin24/polyglot/internal/config"
+	"github.com/qunqin24/polyglot/internal/settings"
 	"github.com/qunqin24/polyglot/internal/store"
 )
 
@@ -60,7 +60,7 @@ func TestAForwardedHeaderIsHonouredByDefault(t *testing.T) {
 func TestAForgedForwardedHeaderIsIgnoredWhenTrustIsOff(t *testing.T) {
 	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, okChatResponse)
-	}, "openai", withConfig(func(c *config.Config) { c.TrustProxyHeaders = false }))
+	}, "openai", withSettings(func(v *settings.Values) { v.TrustProxyHeaders = false }))
 
 	readAll(t, h.post("/v1/chat/completions",
 		`{"model":"my-model","messages":[{"role":"user","content":"hi"}]}`,

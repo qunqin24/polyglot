@@ -1,14 +1,17 @@
 package store
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"strings"
+	"time"
 )
 
 // Cipher encrypts provider credentials at rest with AES-256-GCM. The key is a
@@ -18,11 +21,19 @@ type Cipher struct {
 	aead cipher.AEAD
 }
 
-// LoadCipher reads the key file, creating it on first run. POLYGLOT_SECRET_KEY
-// overrides the file for deployments that inject secrets by environment.
+// LoadCipher reads the key file, creating it on first run.
+//
+// POLYGLOT_SECRET_KEY used to override the file. It is no longer a setting,
+// but a deployment that set it has every credential encrypted under it, so it
+// is honoured one last time: the key it derives is written to the file, and
+// from then on the file is the key. A different file already there was unused
+// while the variable was set; it is kept beside the new one rather than
+// deleted.
 func LoadCipher(path string) (*Cipher, error) {
 	if env := strings.TrimSpace(os.Getenv("POLYGLOT_SECRET_KEY")); env != "" {
-		return newCipher(deriveKey(env))
+		if err := adoptEnvKey(path, deriveKey(env)); err != nil {
+			return nil, err
+		}
 	}
 
 	key, err := os.ReadFile(path)
@@ -43,6 +54,30 @@ func LoadCipher(path string) (*Cipher, error) {
 		return nil, fmt.Errorf("read secret key %s: %w", path, err)
 	}
 	return newCipher(key)
+}
+
+func adoptEnvKey(path string, derived []byte) error {
+	existing, err := os.ReadFile(path)
+	switch {
+	case err == nil && bytes.Equal(existing, derived):
+		slog.Warn("POLYGLOT_SECRET_KEY is no longer read and its key is already in the key file; unset it",
+			"key_file", path)
+		return nil
+	case err == nil:
+		backup := fmt.Sprintf("%s.replaced-%d", path, time.Now().Unix())
+		if err := os.Rename(path, backup); err != nil {
+			return fmt.Errorf("move aside %s: %w", path, err)
+		}
+		slog.Warn("moved an unused secret key file aside to adopt POLYGLOT_SECRET_KEY", "backup", backup)
+	case !errors.Is(err, os.ErrNotExist):
+		return fmt.Errorf("read secret key %s: %w", path, err)
+	}
+	if err := os.WriteFile(path, derived, 0o600); err != nil {
+		return fmt.Errorf("write secret key %s: %w", path, err)
+	}
+	slog.Warn("wrote POLYGLOT_SECRET_KEY's key to the key file; the variable is no longer read and can be unset",
+		"key_file", path)
+	return nil
 }
 
 func newCipher(key []byte) (*Cipher, error) {

@@ -5,43 +5,33 @@ import { api, type FidelityNote, type RequestLog, type RequestLogDetail } from "
 import { errorMessage, useAsync, useInterval } from "@/lib/hooks";
 import { useT, type TFunction } from "@/lib/i18n";
 import { cn, formatDuration, formatTime, formatUSD } from "@/lib/utils";
-import { PageHeader } from "@/components/layout";
+import { PageHeader } from "@/components/layout/page-header";
 import { ProtocolFlow, StatusBadge } from "@/pages/overview";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Dialog } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
+import { Dialog } from "@/components/kit/dialog";
+import { LoadingButton } from "@/components/kit/loading-button";
+import { BlockSkeleton, ListRowsSkeleton, LoadingGate, TableRowsSkeleton } from "@/components/kit/skeletons";
+import { Input } from "@/components/kit/input";
 import {
   Badge,
   EmptyState,
   ErrorBanner,
   Select,
-  Spinner,
   Table,
   Td,
   Th,
   Tr,
-} from "@/components/ui/misc";
+} from "@/components/kit/misc";
 
 type PageSize = 25 | 50 | 100 | 200;
 
 const PAGE_SIZES: PageSize[] = [25, 50, 100, 200];
 
-type RefreshMode = "off" | "live" | "5000" | "10000" | "20000" | "30000";
-
-const REFRESH_DELAYS: Record<RefreshMode, number | null> = {
-  off: null,
-  live: 1000,
-  "5000": 5000,
-  "10000": 10000,
-  "20000": 20000,
-  "30000": 30000,
-};
-
-function initialRefreshMode(): RefreshMode {
-  const saved = localStorage.getItem("polyglot-logs-refresh");
-  return saved !== null && saved in REFRESH_DELAYS ? (saved as RefreshMode) : "off";
-}
+// The list follows new requests on its own. Five seconds is the middle of the
+// choices the old selector offered (1s to 30s): fresh enough to watch traffic
+// arrive, slow enough not to keep a busy install's database working.
+const AUTO_REFRESH_MS = 5000;
 
 function initialPageSize(): PageSize {
   const saved = Number(localStorage.getItem("polyglot-logs-page-size"));
@@ -60,7 +50,7 @@ export function Logs() {
   const [pageInput, setPageInput] = React.useState("1");
   const [query, setQuery] = React.useState("");
   const [selected, setSelected] = React.useState<number | null>(null);
-  const [refreshMode, setRefreshMode] = React.useState<RefreshMode>(initialRefreshMode);
+  const [manualRefreshing, setManualRefreshing] = React.useState(false);
   const [pageVisible, setPageVisible] = React.useState(() => document.visibilityState !== "hidden");
 
   // Debounce the free-text filter so typing does not hammer the API.
@@ -69,7 +59,7 @@ export function Logs() {
     return () => clearTimeout(id);
   }, [model]);
 
-  const { data, loading, error, reload } = useAsync(
+  const { data, loading, initialLoading, stale, error, reload } = useAsync(
     () =>
       api.logs({
         limit: pageSize,
@@ -81,6 +71,9 @@ export function Logs() {
         client_app: clientApp,
       }),
     ["logs", status, protocol, query, clientIP, clientApp, page, pageSize],
+    // Filters and pages keep the rows on screen, dimmed, until the next ones
+    // arrive, so the table and the pager do not collapse and come back.
+    { keepPrevious: true },
   );
 
   // A filtered result set has its own page count, so filters always start at
@@ -106,21 +99,21 @@ export function Logs() {
     return () => document.removeEventListener("visibilitychange", onVisibilityChange);
   }, []);
 
-  const refreshDelay = pageVisible ? REFRESH_DELAYS[refreshMode] : null;
+  // Auto-refresh only makes sense on the newest page with nothing open: new
+  // rows shift offset-based pages, and a list that moves under a reader who is
+  // looking at history or at one request's detail is worse than a stale one.
+  const autoRefresh = pageVisible && page === 1 && selected === null;
   useInterval(() => {
-    // Slow requests never stack up, even in one-second live mode.
-    if (!loading) reload();
-  }, refreshDelay);
+    // Slow requests never stack up. The refresh is silent: no button state.
+    if (!loading) void reload();
+  }, autoRefresh ? AUTO_REFRESH_MS : null);
 
-  function changeRefreshMode(value: string) {
-    const next = value in REFRESH_DELAYS ? (value as RefreshMode) : "off";
-    setRefreshMode(next);
-    localStorage.setItem("polyglot-logs-refresh", next);
-    if (next !== "off") {
-      // Auto-refresh is useful only on the newest page. Returning there also
-      // prevents newly inserted rows from shifting a historical page.
-      setPage(1);
-      reload();
+  async function refreshNow() {
+    setManualRefreshing(true);
+    try {
+      await reload();
+    } finally {
+      setManualRefreshing(false);
     }
   }
 
@@ -135,12 +128,6 @@ export function Logs() {
   function goToPage(value: number) {
     const next = Math.min(totalPages, Math.max(1, Math.trunc(value)));
     setPage(next);
-    if (next > 1 && refreshMode !== "off") {
-      // New rows would continuously shift offset-based historical pages.
-      // Leaving the live view therefore turns auto-refresh off explicitly.
-      setRefreshMode("off");
-      localStorage.setItem("polyglot-logs-refresh", "off");
-    }
   }
 
   function jumpToPage(e: React.FormEvent) {
@@ -157,25 +144,15 @@ export function Logs() {
         description={t("logs.description")}
         action={
           <div className="flex flex-wrap items-center justify-end gap-2">
-            <span className="text-xs font-medium text-muted-foreground">
-              {t("logs.autoRefresh")}
-            </span>
-            <Select
-              value={refreshMode}
-              onValueChange={changeRefreshMode}
-              className="w-32"
-              options={[
-                { value: "off", label: t("logs.refreshOff") },
-                { value: "live", label: t("logs.refreshLive") },
-                { value: "5000", label: t("logs.refreshSeconds", { seconds: "5" }) },
-                { value: "10000", label: t("logs.refreshSeconds", { seconds: "10" }) },
-                { value: "20000", label: t("logs.refreshSeconds", { seconds: "20" }) },
-                { value: "30000", label: t("logs.refreshSeconds", { seconds: "30" }) },
-              ]}
-            />
-            <Button variant="outline" onClick={reload} disabled={loading}>
-              {loading && !data ? <Spinner /> : <RefreshCw />} {t("common.refresh")}
-            </Button>
+            <LoadingButton
+              variant="outline"
+              onClick={() => void refreshNow()}
+              busy={manualRefreshing}
+              icon={<RefreshCw />}
+              iconIsAction
+            >
+              {t("common.refresh")}
+            </LoadingButton>
           </div>
         }
       />
@@ -226,16 +203,12 @@ export function Logs() {
         />
       </div>
 
-      <ErrorBanner message={error} />
+      <ErrorBanner message={error} onRetry={() => void refreshNow()} retrying={manualRefreshing} />
 
-
-      <Card>
-        <CardContent className="p-0">
-          {loading && !data ? (
-            <div className="flex justify-center py-12">
-              <Spinner className="text-muted-foreground" />
-            </div>
-          ) : (data?.logs.length ?? 0) === 0 ? (
+      <Card aria-busy={stale || undefined}>
+        <CardContent className={cn("p-0 transition-opacity duration-200", stale && "opacity-60")}>
+          <LoadingGate loading={initialLoading} skeleton={<TableRowsSkeleton rows={8} columns={5} />}>
+          {(data?.logs.length ?? 0) === 0 ? (
             <EmptyState
               icon={ScrollText}
               title={t("logs.empty")}
@@ -333,6 +306,7 @@ export function Logs() {
               </tbody>
             </Table>
           )}
+          </LoadingGate>
         </CardContent>
       </Card>
 
@@ -352,7 +326,7 @@ export function Logs() {
           <div className="flex items-center justify-center gap-2">
             <Button
               variant="outline"
-              disabled={page <= 1 || loading}
+              disabled={page <= 1 || stale}
               onClick={() => goToPage(page - 1)}
             >
               <ChevronDown className="rotate-90" /> {t("logs.newer")}
@@ -362,7 +336,7 @@ export function Logs() {
             </span>
             <Button
               variant="outline"
-              disabled={page >= totalPages || loading}
+              disabled={page >= totalPages || stale}
               onClick={() => goToPage(page + 1)}
             >
               {t("logs.older")} <ChevronDown className="-rotate-90" />
@@ -381,7 +355,7 @@ export function Logs() {
               className="h-9 w-20 text-center tabular-nums"
               aria-label={t("logs.jumpToPage")}
             />
-            <Button type="submit" variant="outline" disabled={loading}>
+            <Button type="submit" variant="outline" disabled={stale}>
               {t("logs.goToPage")}
             </Button>
           </form>
@@ -397,6 +371,7 @@ function LogDetail({ id, onClose }: { id: number | null; onClose: () => void }) 
   const t = useT();
   const [log, setLog] = React.useState<RequestLogDetail | null>(null);
   const [error, setError] = React.useState("");
+  const [attempt, setAttempt] = React.useState(0);
 
   React.useEffect(() => {
     if (id === null) {
@@ -412,7 +387,7 @@ function LogDetail({ id, onClose }: { id: number | null; onClose: () => void }) 
     return () => {
       cancelled = true;
     };
-  }, [id]);
+  }, [id, attempt]);
 
   return (
     <Dialog
@@ -422,9 +397,15 @@ function LogDetail({ id, onClose }: { id: number | null; onClose: () => void }) 
       className="max-w-2xl"
     >
       {!log ? (
-        <div className="flex justify-center py-8">
-          {error ? <ErrorBanner message={error} /> : <Spinner className="text-muted-foreground" />}
-        </div>
+        error ? (
+          <ErrorBanner message={error} onRetry={() => setAttempt((n) => n + 1)} />
+        ) : (
+          // The dialog keeps the height of the finished content, so it does
+          // not jump when the request arrives.
+          <LoadingGate loading skeleton={<div className="min-h-72 space-y-5"><BlockSkeleton className="h-16" /><ListRowsSkeleton rows={4} /></div>}>
+            {null}
+          </LoadingGate>
+        )
       ) : (
         <div className="space-y-5">
           <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-3">

@@ -17,6 +17,7 @@ import (
 	"github.com/qunqin24/polyglot/internal/config"
 	"github.com/qunqin24/polyglot/internal/pricing"
 	"github.com/qunqin24/polyglot/internal/provider"
+	"github.com/qunqin24/polyglot/internal/settings"
 	"github.com/qunqin24/polyglot/internal/setup"
 	"github.com/qunqin24/polyglot/internal/store"
 	"github.com/qunqin24/polyglot/internal/telemetry"
@@ -48,8 +49,8 @@ type harnessConfig struct {
 	// setup runs after the store is open and before the server starts, for
 	// tests that need a second provider or a different routing shape.
 	setup func(t *testing.T, st *store.Store, defaultProviderID int64)
-	// tweak adjusts the process configuration before the server is built.
-	tweak func(*config.Config)
+	// tweak adjusts the WebUI settings before the server is built.
+	tweak func(*settings.Values)
 }
 
 // withTelemetry replaces the harness's telemetry configuration.
@@ -57,8 +58,8 @@ func withTelemetry(c telemetry.Config) harnessOpt {
 	return func(h *harnessConfig) { h.telemetry = c }
 }
 
-// withConfig adjusts the process configuration the harness serves with.
-func withConfig(fn func(*config.Config)) harnessOpt {
+// withSettings adjusts the WebUI settings the harness serves with.
+func withSettings(fn func(*settings.Values)) harnessOpt {
 	return func(h *harnessConfig) { h.tweak = fn }
 }
 
@@ -90,16 +91,21 @@ func newHarness(t *testing.T, upstreamHandler http.HandlerFunc, protocolName str
 
 	cfg := &config.Config{
 		DataDir:          dir,
-		MaxRequestBytes:  1 << 20,
 		MaxUpstreamBytes: 1 << 20,
-		UpstreamTimeout:  10 * time.Second,
-		Telemetry:        hc.telemetry,
-		// Matches config.Load's default, so a test sees what an install does.
-		TrustProxyHeaders: true,
 	}
+	// The install defaults, so a test sees what an install does, with
+	// limits small enough to exercise.
+	values := settings.Defaults()
+	values.MaxRequestMB = 1
+	values.UpstreamTimeoutSecs = 10
+	// A test must never reach GitHub.
+	values.UpdateCheckEnabled = false
+	// The scrape token is a setting now; carry the one the test chose.
+	values.MetricsToken = hc.telemetry.MetricsToken
 	if hc.tweak != nil {
-		hc.tweak(cfg)
+		hc.tweak(&values)
 	}
+	runtime := settings.Static(values)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	// The real price path, including the catalog the binary ships with, so a
@@ -157,7 +163,7 @@ func newHarness(t *testing.T, upstreamHandler http.HandlerFunc, protocolName str
 	if err != nil {
 		t.Fatalf("setup guard: %v", err)
 	}
-	apiServer := NewServer(st, cfg, log, ul, tel, prices, setupGuard)
+	apiServer := NewServer(st, cfg, runtime, log, ul, tel, prices, setupGuard)
 	srv := httptest.NewServer(apiServer.Handler())
 	t.Cleanup(srv.Close)
 

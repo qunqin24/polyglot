@@ -537,6 +537,24 @@ func TestAQueryCannotCrossTeams(t *testing.T) {
 			}
 		}
 	})
+	drive("SpendStats", func(t *testing.T) {
+		period := SpendPeriod{From: since, To: time.Now().Add(time.Minute), PrevFrom: since.Add(-time.Hour), Bucket: time.Hour}
+		got, err := tm.SpendStats(ctx, period, SpendByProvider)
+		if err != nil {
+			t.Fatalf("spend stats: %v", err)
+		}
+		if got.CostUSD != 1.0 || got.UnpricedRequests != 1 {
+			t.Fatalf("spend = %v with %d unpriced, want 1/1", got.CostUSD, got.UnpricedRequests)
+		}
+		if len(got.Rows) != 1 || got.Rows[0].Key != one.provider.Name {
+			t.Fatalf("spend by provider = %+v, want only %q", got.Rows, one.provider.Name)
+		}
+		for _, c := range got.Cached {
+			if c.ProviderID != 0 && c.ProviderID != one.provider.ID {
+				t.Errorf("cached usage names provider %d", c.ProviderID)
+			}
+		}
+	})
 
 	// ---------------------------------------------------------------------
 	// Writes. A write that crosses is worse than a read that crosses, so each

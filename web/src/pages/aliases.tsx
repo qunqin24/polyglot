@@ -2,24 +2,27 @@ import * as React from "react";
 import { ArrowRight, Pencil, Plus, Tags, Trash2 } from "lucide-react";
 import { api, type AliasInput, type ModelAlias, type Provider } from "@/lib/api";
 import { errorMessage, useAsync } from "@/lib/hooks";
+import { useOptimisticFlags } from "@/lib/optimistic";
 import { useT } from "@/lib/i18n";
 import { Button } from "@/components/ui/button";
+import { LoadingButton } from "@/components/kit/loading-button";
+import { SaveStatus } from "@/components/kit/save-status";
+import { LoadingGate, TableRowsSkeleton } from "@/components/kit/skeletons";
 import { Card, CardContent } from "@/components/ui/card";
-import { ConfirmDialog, Dialog } from "@/components/ui/dialog";
-import { Field, Input } from "@/components/ui/input";
+import { ConfirmDialog, Dialog } from "@/components/kit/dialog";
+import { Field, Input } from "@/components/kit/input";
 import {
   Badge,
   EmptyState,
   ErrorBanner,
   Select,
-  Spinner,
   Switch,
   Table,
   Td,
   Th,
   Tr,
-} from "@/components/ui/misc";
-import { useToast } from "@/components/ui/toast";
+} from "@/components/kit/misc";
+import { useToast } from "@/components/kit/toast";
 
 // An alias is a logical model name. Nothing requires one: a discovered or
 // manually added model is already callable by its own id. Aliases exist so a
@@ -27,7 +30,7 @@ import { useToast } from "@/components/ui/toast";
 export function Aliases({ providers }: { providers: Provider[] }) {
   const t = useT();
   const { toast } = useToast();
-  const { data, loading, error, reload } = useAsync(() => api.aliases(), ["aliases"]);
+  const { data, initialLoading, error, reload } = useAsync(() => api.aliases(), ["aliases"]);
 
   const [open, setOpen] = React.useState(false);
   const [editing, setEditing] = React.useState<ModelAlias | null>(null);
@@ -38,28 +41,28 @@ export function Aliases({ providers }: { providers: Provider[] }) {
     try {
       await api.deleteAlias(deleting.id);
       toast(t("aliases.deleted", { alias: deleting.alias }));
-      reload();
+      void reload();
     } catch (e) {
       toast(errorMessage(e), "error");
-    } finally {
-      setDeleting(null);
     }
   }
 
-  async function toggle(a: ModelAlias, enabled: boolean) {
-    try {
-      await api.updateAlias(a.id, {
+  // The switch flips at once and saves in the background; a failure puts it
+  // back and says so on the row.
+  const flags = useOptimisticFlags<number>(
+    (id, enabled) => {
+      const a = data?.find((x) => x.id === id);
+      if (!a) return Promise.resolve();
+      return api.updateAlias(a.id, {
         alias: a.alias,
         provider_id: a.provider_id,
         upstream_model: a.upstream_model,
         priority: a.priority,
         enabled,
       });
-      reload();
-    } catch (e) {
-      toast(errorMessage(e), "error");
-    }
-  }
+    },
+    reload,
+  );
 
   const hasProviders = providers.length > 0;
 
@@ -78,15 +81,12 @@ export function Aliases({ providers }: { providers: Provider[] }) {
         </Button>
       </div>
 
-      <ErrorBanner message={error} />
+      <ErrorBanner message={error} onRetry={() => void reload()} />
 
       <Card>
         <CardContent className="p-0">
-          {loading && !data ? (
-            <div className="flex justify-center py-12">
-              <Spinner className="text-muted-foreground" />
-            </div>
-          ) : (data?.length ?? 0) === 0 ? (
+          <LoadingGate loading={initialLoading} skeleton={<TableRowsSkeleton rows={4} columns={4} />}>
+          {(data?.length ?? 0) === 0 ? (
             <EmptyState
               icon={Tags}
               title={t("aliases.empty")}
@@ -137,7 +137,14 @@ export function Aliases({ providers }: { providers: Provider[] }) {
                     </Td>
                     <Td className="tabular-nums text-muted-foreground">{a.priority}</Td>
                     <Td>
-                      <Switch checked={a.enabled} onCheckedChange={(v) => void toggle(a, v)} />
+                      <div className="flex items-center gap-2">
+                        <Switch
+                          checked={flags.value(a.id, a.enabled)}
+                          onCheckedChange={(v) => void flags.toggle(a.id, v)}
+                          aria-label={t("common.enabled")}
+                        />
+                        <SaveStatus state={flags.status(a.id)} onRetry={() => flags.retry(a.id)} />
+                      </div>
                     </Td>
                     <Td className="pr-5">
                       <div className="flex justify-end gap-1">
@@ -167,6 +174,7 @@ export function Aliases({ providers }: { providers: Provider[] }) {
               </tbody>
             </Table>
           )}
+          </LoadingGate>
         </CardContent>
       </Card>
 
@@ -180,7 +188,7 @@ export function Aliases({ providers }: { providers: Provider[] }) {
         providers={providers}
         onSaved={() => {
           setOpen(false);
-          reload();
+          void reload();
         }}
       />
 
@@ -189,7 +197,7 @@ export function Aliases({ providers }: { providers: Provider[] }) {
         onOpenChange={(o) => !o && setDeleting(null)}
         title={t("aliases.deleteTitle", { alias: deleting?.alias ?? "" })}
         description={t("aliases.deleteDescription")}
-        onConfirm={() => void remove()}
+        onConfirm={remove}
       />
     </>
   );
@@ -257,9 +265,9 @@ function AliasDialog({
       title={alias ? t("aliases.editTitle") : t("aliases.addTitle")}
       description={t("aliases.dialogDescription")}
       footer={
-        <Button type="submit" form="alias-form" disabled={busy}>
-          {busy && <Spinner />} {t("common.save")}
-        </Button>
+        <LoadingButton type="submit" form="alias-form" busy={busy}>
+          {t("common.save")}
+        </LoadingButton>
       }
     >
       <form id="alias-form" autoComplete="off" onSubmit={(e) => void save(e)} className="space-y-4">

@@ -31,6 +31,12 @@ type Target struct {
 	// does not know; unset — the default — lets a provider's own parameters
 	// through on a same-protocol route.
 	StrictFields bool
+	// Vendor is set when this target belongs to a built-in multi-protocol
+	// upstream; Protocol and BaseURL were then chosen per model from it.
+	Vendor *Vendor
+	// BearerAuth makes the Anthropic and Gemini drivers also send
+	// "Authorization: Bearer", for upstreams that accept no other form.
+	BearerAuth bool
 }
 
 // ValidateBaseURL rejects URLs that are malformed or that would let a

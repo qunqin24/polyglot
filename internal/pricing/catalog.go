@@ -3,6 +3,7 @@ package pricing
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -75,6 +76,14 @@ type Entry struct {
 type Snapshot struct {
 	Version string  `json:"version"`
 	Entries []Entry `json:"entries"`
+	// Makers maps a normalised model id to the models.dev id of the company
+	// that made it — "glm-5.2" to "zhipuai" even where Alibaba resells it.
+	// It is not a price and is never consulted for one; the WebUI uses it to
+	// put the right logo next to a model.
+	Makers map[string]string `json:"makers,omitempty"`
+	// Names maps the same keys to the display name the maker gives the model
+	// on models.dev, cleaned up for display: "gpt-5.5" to "GPT 5.5".
+	Names map[string]string `json:"names,omitempty"`
 }
 
 // modelsDevFile is the part of https://models.dev/api.json this package reads.
@@ -86,6 +95,11 @@ type modelsDevFile map[string]struct {
 
 type modelsDevModel struct {
 	Cost *modelsDevCost `json:"cost"`
+	// CanonicalModelID is "<maker>/<model>", set on most resold entries and
+	// some first-party ones. Its prefix is who made the model.
+	CanonicalModelID string `json:"canonical_model_id"`
+	// Name is the human name, e.g. "DeepSeek V4 Flash".
+	Name string `json:"name"`
 }
 
 type modelsDevCost struct {
@@ -182,8 +196,136 @@ func Parse(raw []byte, version string) (*Snapshot, error) {
 	if len(snap.Entries) == 0 {
 		return nil, fmt.Errorf("parse models.dev catalog: no first-party prices found")
 	}
+	snap.Makers = makers(file)
+	snap.Names = names(file, snap.Makers)
 	// A stable order keeps the generated snapshot free of spurious diffs when
 	// nothing about the prices changed.
 	slices.SortFunc(snap.Entries, func(a, b Entry) int { return strings.Compare(a.ID, b.ID) })
 	return snap, nil
+}
+
+// makers works out who made each model, across every provider models.dev
+// lists rather than only the first-party ones prices come from: a model the
+// operator reaches through Groq or OpenRouter still has a maker.
+//
+// A canonical_model_id is the answer whenever any provider states one. Failing
+// that, a model listed by a provider that is itself a maker — Anthropic's own
+// entries carry no canonical id — is taken to be that provider's. The stated
+// answer always wins over the inferred one, so a first-party vendor that
+// resells someone else's model without saying so cannot claim it, as long as
+// any other listing names the real maker.
+//
+// Providers are walked in sorted order so two runs over the same file produce
+// the same map; on today's catalog no id has two stated makers.
+func makers(file modelsDevFile) map[string]string {
+	stated := map[string]string{}
+	isMaker := map[string]bool{}
+	providers := make([]string, 0, len(file))
+	for id := range file {
+		providers = append(providers, id)
+	}
+	slices.Sort(providers)
+
+	record := func(into map[string]string, id, maker string) {
+		key := Normalize(id)
+		if key == "" || tooGeneric[key] {
+			return
+		}
+		if _, ok := into[key]; !ok {
+			into[key] = maker
+		}
+	}
+
+	for _, pid := range providers {
+		for id, m := range file[pid].Models {
+			maker, _, ok := strings.Cut(strings.ToLower(strings.TrimSpace(m.CanonicalModelID)), "/")
+			if !ok || maker == "" {
+				continue
+			}
+			isMaker[maker] = true
+			record(stated, id, maker)
+			record(stated, m.CanonicalModelID, maker)
+		}
+	}
+
+	inferred := map[string]string{}
+	for _, pid := range providers {
+		if !isMaker[pid] {
+			continue
+		}
+		for id, m := range file[pid].Models {
+			if strings.Contains(m.CanonicalModelID, "/") {
+				continue
+			}
+			record(inferred, id, pid)
+		}
+	}
+	for k, v := range inferred {
+		if _, ok := stated[k]; !ok {
+			stated[k] = v
+		}
+	}
+	return stated
+}
+
+// names gives each model the name its maker lists it under. Only the maker's
+// own listing counts: resellers spell one model several ways ("GLM 5.2",
+// "GLM-5.2", "DeepSeek-V4-Flash", the bare id), and the maker's spelling is
+// the one people know. A resold id the maker lists under another id is named
+// through its canonical_model_id.
+func names(file modelsDevFile, makerOf map[string]string) map[string]string {
+	own := map[string]map[string]string{} // maker → normalised id → name
+	for maker := range valuesOf(makerOf) {
+		p, ok := file[maker]
+		if !ok {
+			continue
+		}
+		byID := map[string]string{}
+		for id, m := range p.Models {
+			if n := DisplayName(m.Name); n != "" {
+				byID[Normalize(id)] = n
+			}
+		}
+		own[maker] = byID
+	}
+	// The canonical id each listed id points at, for ids the maker does not
+	// list under that spelling.
+	canonical := map[string]string{}
+	for _, p := range file {
+		for id, m := range p.Models {
+			if _, c, ok := strings.Cut(m.CanonicalModelID, "/"); ok {
+				if _, seen := canonical[Normalize(id)]; !seen {
+					canonical[Normalize(id)] = Normalize(c)
+				}
+			}
+		}
+	}
+	out := map[string]string{}
+	for key, maker := range makerOf {
+		if n := own[maker][key]; n != "" {
+			out[key] = n
+		} else if n := own[maker][canonical[key]]; n != "" {
+			out[key] = n
+		}
+	}
+	return out
+}
+
+func valuesOf(m map[string]string) map[string]bool {
+	out := map[string]bool{}
+	for _, v := range m {
+		out[v] = true
+	}
+	return out
+}
+
+var trailingNote = regexp.MustCompile(`\s*\([^)]*\)\s*$`)
+
+// DisplayName tidies a catalog name for display. A trailing note such as
+// "(latest)" is dropped, and hyphens become spaces, so "GPT-5.5" reads
+// "GPT 5.5" next to "Claude Sonnet 4.6".
+func DisplayName(name string) string {
+	name = trailingNote.ReplaceAllString(strings.TrimSpace(name), "")
+	name = strings.Join(strings.Fields(strings.ReplaceAll(name, "-", " ")), " ")
+	return name
 }

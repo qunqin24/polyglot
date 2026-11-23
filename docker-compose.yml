@@ -10,12 +10,9 @@ services:
       - "3000:3000"
     volumes:
       - polyglot-data:/data
+    # Timeouts, log retention, network rules, metrics and tracing are set in
+    # the WebUI (Settings → Runtime), not here.
     environment:
-      # Uncomment to change where request logs are pruned from.
-      # LOG_RETENTION_DAYS: "30"
-      # Refuse upstreams on private networks. Leave off if you proxy a local
-      # Ollama or vLLM.
-      # BLOCK_PRIVATE_UPSTREAM: "true"
       LOG_LEVEL: "info"
 
 volumes:

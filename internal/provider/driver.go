@@ -28,6 +28,9 @@ type Driver interface {
 type DiscoveredModel struct {
 	ID          string
 	DisplayName string
+	// Protocol is set only for a built-in multi-protocol vendor, whose listing
+	// says which protocol each model uses. Empty means the provider's own.
+	Protocol protocol.Name
 }
 
 // ModelDiscoverer is an optional capability. A driver that has no reliable way
@@ -227,6 +230,29 @@ func openAIBaseURL(base string) string {
 // override it per provider via custom headers.
 const anthropicVersion = "2023-06-01"
 
+// setAnthropicAuth sends x-api-key, and Bearer as well for upstreams that
+// accept only that. Sending both is harmless to one that takes either.
+func setAnthropicAuth(req *http.Request, t *Target) {
+	if t.APIKey == "" {
+		return
+	}
+	req.Header.Set("x-api-key", t.APIKey)
+	if t.BearerAuth {
+		req.Header.Set("Authorization", "Bearer "+t.APIKey)
+	}
+}
+
+// setGoogleAuth is the Gemini counterpart of setAnthropicAuth.
+func setGoogleAuth(req *http.Request, t *Target) {
+	if t.APIKey == "" {
+		return
+	}
+	req.Header.Set("x-goog-api-key", t.APIKey)
+	if t.BearerAuth {
+		req.Header.Set("Authorization", "Bearer "+t.APIKey)
+	}
+}
+
 type anthropicDriver struct{}
 
 func (anthropicDriver) Protocol() protocol.Name { return protocol.Anthropic }
@@ -236,9 +262,7 @@ func (anthropicDriver) ChatRequest(ctx context.Context, t *Target, _ string, bod
 	if err != nil {
 		return nil, err
 	}
-	if t.APIKey != "" {
-		req.Header.Set("x-api-key", t.APIKey)
-	}
+	setAnthropicAuth(req, t)
 	req.Header.Set("anthropic-version", anthropicVersion)
 	if stream {
 		req.Header.Set("Accept", "text/event-stream")
@@ -252,9 +276,7 @@ func (anthropicDriver) ModelsRequest(ctx context.Context, t *Target) (*http.Requ
 	if err != nil {
 		return nil, false
 	}
-	if t.APIKey != "" {
-		req.Header.Set("x-api-key", t.APIKey)
-	}
+	setAnthropicAuth(req, t)
 	req.Header.Set("anthropic-version", anthropicVersion)
 	applyCustom(req, t)
 	return req, true
@@ -308,9 +330,7 @@ func (geminiDriver) ChatRequest(ctx context.Context, t *Target, model string, bo
 	if err != nil {
 		return nil, err
 	}
-	if t.APIKey != "" {
-		req.Header.Set("x-goog-api-key", t.APIKey)
-	}
+	setGoogleAuth(req, t)
 	if stream {
 		req.Header.Set("Accept", "text/event-stream")
 	}
@@ -329,9 +349,7 @@ func (geminiDriver) ModelsRequest(ctx context.Context, t *Target) (*http.Request
 	if err != nil {
 		return nil, false
 	}
-	if t.APIKey != "" {
-		req.Header.Set("x-goog-api-key", t.APIKey)
-	}
+	setGoogleAuth(req, t)
 	applyCustom(req, t)
 	return req, true
 }
@@ -428,9 +446,7 @@ func (interactionsDriver) ChatRequest(ctx context.Context, t *Target, model stri
 	if err != nil {
 		return nil, err
 	}
-	if t.APIKey != "" {
-		req.Header.Set("x-goog-api-key", t.APIKey)
-	}
+	setGoogleAuth(req, t)
 	if stream {
 		req.Header.Set("Accept", "text/event-stream")
 	}

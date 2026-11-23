@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/qunqin24/polyglot/internal/auth"
-	"github.com/qunqin24/polyglot/internal/config"
+	"github.com/qunqin24/polyglot/internal/settings"
 	"github.com/qunqin24/polyglot/internal/store"
 )
 
@@ -162,72 +162,50 @@ func TestCLIWithNoArgumentsStartsTheServer(t *testing.T) {
 	}
 }
 
-func TestConfigCommandNeverPrintsTheSecretKey(t *testing.T) {
-	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("POLYGLOT_SECRET_KEY", "a-real-encryption-key-value")
-
-	if got := secretState(); strings.Contains(got, "a-real-encryption-key-value") {
-		t.Errorf("`polyglot config` would print the encryption key: %q", got)
+func TestConfigCommandNeverPrintsCredentials(t *testing.T) {
+	v := settings.Defaults()
+	v.MetricsToken = "pmet_a-real-scrape-token"
+	v.OTLPHeaders = map[string]string{"x-api-key": "collector-secret-value"}
+	for _, row := range settingRows(v) {
+		if strings.Contains(row[1], "a-real-scrape-token") || strings.Contains(row[1], "collector-secret-value") {
+			t.Errorf("`polyglot config` would print a credential in %q: %q", row[0], row[1])
+		}
 	}
 }
 
-func TestConfigCommandNeverPrintsTheSetupToken(t *testing.T) {
-	const token = "operator-setup-token-value"
-	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("POLYGLOT_SETUP_TOKEN", token)
-	cfg, err := config.Load()
-	if err != nil {
-		t.Fatalf("load config: %v", err)
+// Sources that read the environment, and the reads that are not settings.
+var (
+	envSources  = []string{"../../internal/config/config.go", "main.go"}
+	notSettings = map[string]bool{
+		// Development-only knobs, set by `make dev`, not aimed at operators.
+		"POLYGLOT_DEV":       true,
+		"POLYGLOT_DEV_PROXY": true,
+		// Read only to stop a start that would otherwise misbehave silently.
+		"PORT":    true,
+		"DB_PATH": true,
 	}
-	for _, s := range settings {
-		if s.key != "POLYGLOT_SETUP_TOKEN" {
-			continue
-		}
-		if got := s.effective(cfg); strings.Contains(got, token) {
-			t.Fatalf("setup token would be printed: %q", got)
-		}
-		return
-	}
-	t.Fatal("POLYGLOT_SETUP_TOKEN is missing from the settings table")
-}
+)
 
 // TestEverySettingIsDocumented scans the source for environment variables the
-// code actually reads and fails if one is missing from the settings table.
-// LOG_FORMAT shipped undocumented for exactly this reason: nothing connected
-// "the code reads it" to "an operator can find out about it".
+// code actually reads and fails if one is missing from the table `polyglot
+// help` prints.
 func TestEverySettingIsDocumented(t *testing.T) {
-	// Where configuration is read from the environment.
-	sources := []string{
-		"../../internal/config/config.go",
-		"../../internal/provider/client.go",
-		"../../internal/store/cipher.go",
-		"main.go",
-	}
-	// Development-only knobs, set by `make dev`, not aimed at operators.
-	ignored := map[string]bool{
-		"POLYGLOT_DEV":                    true,
-		"POLYGLOT_DEV_PROXY":              true,
-		"POLYGLOT_BLOCK_PRIVATE_UPSTREAM": true, // prefixed alias of a listed key
-	}
-
 	documented := map[string]bool{}
-	for _, s := range settings {
+	for _, s := range envSettings {
 		documented[s.key] = true
 	}
-
-	// envStr("X", ...), envInt("X", ...), envBool("X", ...), os.Getenv("X")
-	pattern := regexp.MustCompile(`(?:envStr|envInt|envBool|Getenv)\("([A-Z][A-Z0-9_]{2,})"`)
-	for _, src := range sources {
+	pattern := regexp.MustCompile(`(?:envStr|envBool|Getenv)\("([A-Z][A-Z0-9_]{2,})"`)
+	for _, src := range envSources {
 		b, err := os.ReadFile(src)
 		if err != nil {
 			t.Fatalf("read %s: %v", src, err)
 		}
 		for _, m := range pattern.FindAllStringSubmatch(string(b), -1) {
 			key := m[1]
-			if ignored[key] || documented[key] {
+			if notSettings[key] || documented[key] {
 				continue
 			}
-			t.Errorf("%s reads %s, but it is missing from the settings table in settings.go, "+
+			t.Errorf("%s reads %s, but it is missing from envSettings in settings.go, "+
 				"so `polyglot help` will not mention it", src, key)
 		}
 	}
@@ -238,54 +216,16 @@ func TestEverySettingIsDocumented(t *testing.T) {
 // exist.
 func TestSettingsTableHasNoInvention(t *testing.T) {
 	var all strings.Builder
-	for _, src := range []string{
-		"../../internal/config/config.go",
-		"../../internal/provider/client.go",
-		"../../internal/store/cipher.go",
-		"main.go",
-	} {
+	for _, src := range envSources {
 		b, err := os.ReadFile(src)
 		if err != nil {
 			t.Fatalf("read %s: %v", src, err)
 		}
 		all.Write(b)
 	}
-	for _, s := range settings {
+	for _, s := range envSettings {
 		if !strings.Contains(all.String(), `"`+s.key+`"`) {
 			t.Errorf("`polyglot help` advertises %s, but no code reads it", s.key)
 		}
 	}
-}
-
-// TestConfigNeverReportsDefaultForANonDefaultValue is the one mistake
-// `polyglot config` must not make. SECURE_COOKIES is false by default but an
-// https PUBLIC_URL switches it on, and reporting "default" beside "true" would
-// send an operator looking in the wrong place.
-func TestConfigNeverReportsDefaultForANonDefaultValue(t *testing.T) {
-	t.Setenv("DATA_DIR", t.TempDir())
-	t.Setenv("PUBLIC_URL", "https://gw.example.com")
-
-	cfg, err := config.Load()
-	if err != nil {
-		t.Fatalf("load config: %v", err)
-	}
-	if !cfg.SecureCookies {
-		t.Fatal("an https PUBLIC_URL no longer turns on Secure cookies; this test is stale")
-	}
-
-	for _, s := range settings {
-		if s.key != "SECURE_COOKIES" {
-			continue
-		}
-		if s.source == nil {
-			t.Fatal("SECURE_COOKIES can be switched on by PUBLIC_URL but declares no source")
-		}
-		if why := s.source(cfg); why == "" {
-			t.Error("SECURE_COOKIES is true but reports the plain default source")
-		} else if !strings.Contains(why, "PUBLIC_URL") {
-			t.Errorf("source = %q, want it to name PUBLIC_URL", why)
-		}
-		return
-	}
-	t.Fatal("SECURE_COOKIES is missing from the settings table")
 }

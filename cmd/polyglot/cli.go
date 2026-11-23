@@ -24,12 +24,11 @@ Usage:
   polyglot config           Print the effective configuration and where each value came from
   polyglot version          Print the version
 
-Configuration is environment variables only — there is no config file. The
-table below is what exists; ` + "`polyglot config`" + ` shows what this install is
-actually using and where each value came from.
-
-Everything else — providers, models, aliases, API keys — lives in the SQLite
-database under DATA_DIR and is managed from the WebUI.
+Only a few things are environment variables: where to listen, where the data
+directory is, and the log level — the table below. Everything else is set on
+the WebUI's settings page and stored in the SQLite database under DATA_DIR,
+along with providers, models, aliases and API keys. ` + "`polyglot config`" + ` shows
+what this install is using.
 `
 
 func versionString() string {

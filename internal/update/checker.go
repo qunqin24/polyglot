@@ -70,8 +70,11 @@ func newChecker(repo, current string, enabled bool, apiBase string, client *http
 // Check returns a cached result unless force is true. Network errors are
 // cached for a shorter window so an outage heals without hammering GitHub.
 func (c *Checker) Check(ctx context.Context, force bool) Status {
-	base := Status{Enabled: c.enabled, CurrentVersion: c.current}
-	if !c.enabled {
+	c.mu.Lock()
+	enabled := c.enabled
+	c.mu.Unlock()
+	base := Status{Enabled: enabled, CurrentVersion: c.current}
+	if !enabled {
 		return base
 	}
 	current, ok := parseVersion(c.current)
@@ -97,6 +100,18 @@ func (c *Checker) Check(ctx context.Context, force bool) Status {
 		c.nextCheck = now.Add(errorInterval)
 	}
 	return result
+}
+
+// Configure applies a change from the WebUI. A different repository or a
+// re-enabled check drops the cached answer, which was about something else.
+func (c *Checker) Configure(repo string, enabled bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if repo != c.repo || enabled != c.enabled {
+		c.cached = Status{}
+		c.nextCheck = time.Time{}
+	}
+	c.repo, c.enabled = repo, enabled
 }
 
 func (c *Checker) fetch(ctx context.Context, current semVersion, status Status, now time.Time) Status {

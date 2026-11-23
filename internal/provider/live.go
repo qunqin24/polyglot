@@ -17,7 +17,7 @@ const livePath = "ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiG
 // DialLive uses the process-wide HTTP transport and its guarded dialer. The
 // provider supplies a Gemini API base URL (not the WebSocket endpoint).
 func (c *Client) DialLive(ctx context.Context, t *Target) (*websocket.Conn, error) {
-	if t.Protocol != protocol.Gemini {
+	if t.Protocol != protocol.Gemini || t.Vendor != nil {
 		return nil, fmt.Errorf("provider %q does not speak Gemini Live", t.Name)
 	}
 	if err := ValidateBaseURL(t.BaseURL); err != nil {

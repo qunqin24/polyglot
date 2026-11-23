@@ -110,7 +110,7 @@ DATA_DIR=./data ./bin/polyglot
 ```
 
 打开 <http://localhost:3000>。使用二进制部署时，从 `data/setup.token` 读取一次性安装
-口令（也可以设置 `POLYGLOT_SETUP_TOKEN`），在初始化表单中输入。随后添加供应商并创
+口令，在初始化表单中输入。随后添加供应商并创
 建 API Key 即可。
 
 ### 第一个供应商
@@ -365,8 +365,8 @@ Anthropic `thinking` 签名和 OpenAI Responses 推理项遵循同样的原则�
 ### 多模态
 
 图片和 PDF 在五种协议之间转换。内联 base64 永远无损。远程 URL 转发给能自己获取
-的协议；Gemini 不行，所以这种配对默认报为不支持——除非开了
-`FETCH_REMOTE_MEDIA=true`，此时 Polyglot 下载并内联，带 SSRF 防护（私有 IP 拒
+的协议；Gemini 不行，所以这种配对默认报为不支持——除非在 **设置 → 运行参数**
+里打开「代为下载远程图片和文件」，此时 Polyglot 下载并内联，带 SSRF 防护（私有 IP 拒
 绝、大小限制、类型校验、重定向限制）。
 
 Google Gen AI Go SDK 客户端现在可以通过 Polyglot 的 WebSocket 使用实时音频、转写、
@@ -462,45 +462,86 @@ prompt、工具调用/结果、回复和逐次尝试的线上报文，保留期 
 
 显示时区（按管理员存储，时间戳内部始终 UTC）、语言、修改密码。
 
+**运行参数** 页放的是原来用环境变量配置的实例参数：上游超时、失败冷却、请求体
+上限、请求日志保留、信任代理头、禁止访问内网上游、代为下载远程媒体及附件上限、
+更新检查、Prometheus 指标（含抓取 Token）和链路追踪。改动保存在数据库里（加密），
+保存后立即生效；指标和链路追踪在启动时建立，需要重启才生效。
+
 ## 配置
 
-每个部署会变的东西都是环境变量，其余都在数据库里，通过 WebUI 管理。
+环境变量只剩三个，都是打开数据库之前就要用到的。其余设置都在 WebUI 的
+**设置 → 运行参数** 里。
 
 | 变量 | 默认值 | 用途 |
 |---|---|---|
-| `PORT` | `3000` | 监听端口 |
-| `LISTEN` | `127.0.0.1:3000` | 完整监听地址（覆盖 `PORT`） |
-| `DATA_DIR` | `/data` | SQLite 文件、加密密钥、运行时数据 |
-| `DB_PATH` | `$DATA_DIR/polyglot.db` | 只覆盖数据库位置 |
-| `LOG_RETENTION_DAYS` | `30` | `0` 永久保留日志 |
-| `UPSTREAM_TIMEOUT` | `10m` | 单次上游请求时间上限 |
-| `PROVIDER_COOLDOWN` | `30s` | 失败供应商被跳过的时长 |
-| `MAX_REQUEST_MB` | `32` | 客户端请求体限制 |
+| `LISTEN` | `127.0.0.1:3000`（Docker 镜像里是 `:3000`） | 监听地址，如 `:3000` 表示所有网卡 |
+| `DATA_DIR` | `/data`，没有则回退到 `./data` | SQLite 数据库、加密密钥、安装口令 |
 | `LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
-| `LOG_FORMAT` | `text` | `json` 用于结构化日志 |
-| `PUBLIC_URL` | — | 填 `https://` 值会打开 Secure Cookie |
-| `SECURE_COOKIES` | `false` | 不设 `PUBLIC_URL` 也强制 Secure Cookie |
-| `BLOCK_PRIVATE_UPSTREAM` | `false` | 拒绝私网地址的供应商 |
-| `TRUST_PROXY_HEADERS` | `true` | 信任 `X-Forwarded-For`；如果端口不经代理也能访问，关掉它 |
-| `POLYGLOT_SECRET_KEY` | — | 覆盖 `$DATA_DIR/secret.key` |
-| `POLYGLOT_SETUP_TOKEN` | `$DATA_DIR/setup.token` | 覆盖一次性首次安装口令 |
-| `FETCH_REMOTE_MEDIA` | `false` | 为不获取 URL 的上游下载客户端链接的图片 |
-| `MAX_MEDIA_MB` | `20` | 单个附件下载上限 |
-| `UPDATE_CHECK_ENABLED` | `true` | 管理员打开 WebUI 时检查公开 GitHub 标签 |
-| `UPDATE_REPOSITORY` | `qunqin24/polyglot` | 更新检查使用的 GitHub `owner/repository` |
 
-### 遥测变量
+三个变量也可以加 `POLYGLOT_` 前缀（如 `POLYGLOT_LISTEN`）。日志固定为文本格式。
+`polyglot help` 输出这张表，`polyglot config` 显示当前生效的值，数据库里的设置也
+包括在内。
 
-| 变量 | 默认值 | 用途 |
-|---|---|---|
-| `TELEMETRY_ENABLED` | `true` | 指标和 tracing 总开关 |
-| `METRICS_ENABLED` | `true` | 进程内收集 Prometheus 指标 |
-| `METRICS_TOKEN` | — | `GET /metrics` 的 Bearer token（不设无端点） |
-| `TRACING_ENABLED` | `false` | 输出 OpenTelemetry span |
-| `OTLP_ENDPOINT` | — | 你的 collector，如 `http://collector:4318` |
-| `OTLP_HEADERS` | — | 额外 collector 头，`k=v,k2=v2` |
-| `TRACE_SAMPLE_RATIO` | `1` | 自发起 trace 的比例，`0` 到 `1` |
-| `OTEL_SERVICE_NAME` | `polyglot` | 导出 span 上的 `service.name` |
+### 运行参数
+
+WebUI 的 **设置 → 运行参数**：
+
+| 分组 | 设置项 |
+|---|---|
+| 请求 | 上游超时（秒）、失败冷却（秒）、请求体上限（MB）、请求日志保留（天，`0` 表示一直保留） |
+| 网络与安全 | 信任代理头、禁止访问内网上游、代为下载远程图片和文件（含单个附件上限，MB） |
+| 更新检查 | 检查新版本、检查的仓库 |
+| 监控 | Prometheus 指标及抓取 Token；链路追踪、收集器地址、收集器请求头、采样比例、服务名 |
+
+这些设置存在数据库里，因为含有抓取 Token 和收集器请求头，所以是加密存储的。保存
+后立即生效，只有指标和链路追踪要重启。
+
+**信任代理头** 默认打开，这样放在反向代理后面时，请求日志里记的是真实客户端
+地址。如果端口不经代理也能访问，要把它关掉，否则客户端可以伪造
+`X-Forwarded-For`。
+
+### 自动处理的部分
+
+下面这些原来可以配置，现在不用管了：
+
+- **加密密钥**：固定为 `$DATA_DIR/secret.key`，首次启动自动生成。
+- **安装口令**：固定自动生成到 `$DATA_DIR/setup.token`。
+- **Secure Cookie**：按请求判断。请求本身是 TLS，或者信任代理头已打开且代理发来
+  `X-Forwarded-Proto: https` 时，设置 Secure。
+- **指标 Token**：首次启动自动生成，在 **设置 → 运行参数** 里查看、复制或重新
+  生成。
+- **指标和链路追踪** 各有一个开关，不再有总开关。
+
+### 从旧版本升级
+
+升级后第一次启动时，如果数据库里还没有这批运行参数，Polyglot 会把仍然设着的旧
+环境变量（包括带 `POLYGLOT_` 前缀的写法）导入一次，并在日志里警告这些变量现在可
+以删掉了。此后这些变量不再被读取；之后启动时如果还设着，日志会警告。要改值请到
+WebUI 里改。
+
+会被导入的变量有：`LOG_RETENTION_DAYS`、`UPSTREAM_TIMEOUT`、`PROVIDER_COOLDOWN`、
+`MAX_REQUEST_MB`、`TRUST_PROXY_HEADERS`、`BLOCK_PRIVATE_UPSTREAM`、
+`FETCH_REMOTE_MEDIA`、`MAX_MEDIA_MB`、`UPDATE_CHECK_ENABLED`、
+`UPDATE_REPOSITORY`、`METRICS_ENABLED`、`METRICS_TOKEN`、`TRACING_ENABLED`、
+`OTLP_ENDPOINT`、`OTLP_HEADERS`、`TRACE_SAMPLE_RATIO`、`OTEL_SERVICE_NAME`。
+`TELEMETRY_ENABLED` 没有单独的设置项了，设成 `false` 会在导入时把指标和链路追踪
+都关掉。`PUBLIC_URL`、`SECURE_COOKIES` 不再需要，Secure Cookie 按请求自动判断
+（见上文）。`LOG_FORMAT` 已删除，日志固定为文本格式。带单位的时长（如
+`UPSTREAM_TIMEOUT=10m`）照常识别，导入后换算成秒。
+
+另外需要检查：
+
+- **`PORT` 和 `DB_PATH` 会阻止启动。** 悄悄忽略它们，要么服务换了端口，要么打开
+  一个空数据库，所以 Polyglot 会直接报错退出，并说明怎么改。把 `PORT=8080` 换成
+  `LISTEN=:8080`。数据库固定为 `$DATA_DIR/polyglot.db`：把原来的文件移到这个位置
+  （或者让 `DATA_DIR` 指向它所在的目录），然后删掉 `DB_PATH`。
+- **`POLYGLOT_SECRET_KEY`**：如果还设着，第一次启动会把它派生出的密钥写进
+  `$DATA_DIR/secret.key`，用它加密的数据仍然能读。已有的 `secret.key` 如果密钥不
+  同，会先改名备份为 `secret.key.replaced-<时间戳>`。之后可以删掉这个变量。
+- **`POLYGLOT_SETUP_TOKEN`** 不再读取，口令固定自动生成在
+  `$DATA_DIR/setup.token`。
+- **`/metrics`**：只要指标开着，就用 **设置 → 运行参数** 里显示的 Token 抓取。以前
+  设过 `METRICS_TOKEN` 的，它已被导入，Prometheus 的配置不用改。
 
 ### HTTPS
 
@@ -519,13 +560,14 @@ Polyglot 只提供明文 HTTP。把 Caddy、Cloudflare、Nginx 或 1Panel 放在
 管理员登录并打开 WebUI 时，服务端会通过公开 GitHub Tags API 检查兼容通道的新版本；
 成功结果缓存六小时，不发送 prompt、供应商数据或实例标识。这个请求必然会向 GitHub
 暴露服务器 IP 和包含 Polyglot 版本的 User-Agent。设置
-`UPDATE_CHECK_ENABLED=false` 可完全关闭该请求。
+在 **设置 → 运行参数** 里关掉「检查新版本」即可完全停止该请求。
 
 ### 指标
 
-默认在进程内收集（每请求几次原子操作）。`GET /metrics` 只在设了
-`METRICS_TOKEN` 时开放——端口经常暴露在公网，一个开放的 `/metrics` 会向任何人
-公开你的供应商名、模型列表和流量。
+默认在进程内收集（每请求几次原子操作），开关在 **设置 → 运行参数**，改动需要
+重启。指标开着时，`GET /metrics` 只接受该页面上显示的抓取 Token（可在那里复制或
+重新生成）——端口经常暴露在公网，一个开放的 `/metrics` 会向任何人公开你的供应商
+名、模型列表和流量。
 
 ```yaml
 # prometheus.yml
@@ -533,7 +575,7 @@ scrape_configs:
   - job_name: polyglot
     static_configs: [{ targets: ["polyglot:3000"] }]
     authorization:
-      credentials: "<METRICS_TOKEN 的值>"
+      credentials: "<从 设置 → 运行参数 复制的抓取 Token>"
 ```
 
 主要指标：
@@ -570,12 +612,10 @@ scrape_configs:
 
 ### Tracing
 
-默认关闭。指向你自己的 collector：
-
-```bash
-TRACING_ENABLED=true
-OTLP_ENDPOINT=http://collector:4318
-```
+默认关闭。在 **设置 → 运行参数** 里打开链路追踪，把收集器地址填成你自己的
+collector，如 `http://collector:4318`。收集器请求头（通常是托管服务给的 API
+Token）、采样比例（0 到 1）和服务名也在同一页。链路追踪在启动时建立，改动后需要
+重启 Polyglot。
 
 传输：**仅 OTLP over HTTP + JSON 编码。** 没有 gRPC。指标不通过 OTLP 导出——用
 Prometheus 抓取。
@@ -592,7 +632,7 @@ Prometheus 抓取。
 ### 供应商容错
 
 刚出错的供应商在有其他供应商提供同模型时会被**跳过 30 秒**
-（`PROVIDER_COOLDOWN`）。只有一个供应商的模型永远不跳过。所有供应商都在冷却时，
+（默认值，在 **设置 → 运行参数** 的「失败冷却」里改）。只有一个供应商的模型永远不跳过。所有供应商都在冷却时，
 忽略冷却。
 
 供应商可选在**连续两次 401 后自动关闭**——按供应商单独启用，因为 401 也可能来自
@@ -618,8 +658,8 @@ curl http://localhost:3000/v1/chat/completions \
 - 错误路径：上游凭据在到达客户端或日志之前被抹掉。
 - 请求日志：默认只记录元数据；可选择开启完整正文记录，保留期 3/7/30 天，外部访问
   走单独的只读日志 Key。传输凭据被排除在外；对话正文按原样保留。详见[内容日志](docs/log-api.md)。
-- 管理会话：HttpOnly Cookie + 双提交 CSRF token。
-- 首次安装：一次性安装口令，并由数据库保证只能有一个管理员。
+- 管理会话：HttpOnly Cookie + 双提交 CSRF token；请求经 HTTPS 到达时自动加上 Secure。
+- 首次安装：一次性安装口令（自动生成在 `$DATA_DIR/setup.token`），并由数据库保证只能有一个管理员。
 - 上游存储：OpenAI Responses 和 Gemini Interactions 的 `store` 字段缺省为
   `true`。Polyglot 显式发送 `false`。
 - 媒体下载：私有 IP 无条件拒绝，有大小限制、类型校验和重定向限制。
@@ -653,6 +693,9 @@ make vulncheck      # 使用固定 Go 和 govulncheck 扫描可达漏洞
 make web-dev        # 终端 1: Vite :5173，热更新
 make dev            # 终端 2: Go API :3000，把 UI 代理到 Vite
 ```
+
+`make dev` 会设 `POLYGLOT_DEV=true`，让 WebUI 由 Vite 服务；`POLYGLOT_DEV_PROXY`
+可以改 Vite 的地址（默认 `http://127.0.0.1:5173`）。这两个变量只用于本地开发。
 
 ### SDK 兼容性测试
 
@@ -707,9 +750,9 @@ git push origin v1.3.0-preview.1
 ```bash
 polyglot                  # 启动网关
 polyglot reset-password   # 恢复被锁的管理员
-polyglot config           # 当前配置及每个值的来源
+polyglot config           # 当前生效的设置及来源（环境变量或 WebUI）
 polyglot version          # 构建版本和 commit
-polyglot help             # 所有环境变量及默认值
+polyglot help             # 环境变量及默认值
 ```
 
 ## 计划中，但还没做

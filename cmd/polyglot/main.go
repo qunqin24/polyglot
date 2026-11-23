@@ -17,6 +17,7 @@ import (
 	"github.com/qunqin24/polyglot/internal/api"
 	"github.com/qunqin24/polyglot/internal/config"
 	"github.com/qunqin24/polyglot/internal/pricing"
+	"github.com/qunqin24/polyglot/internal/settings"
 	"github.com/qunqin24/polyglot/internal/setup"
 	"github.com/qunqin24/polyglot/internal/store"
 	"github.com/qunqin24/polyglot/internal/telemetry"
@@ -41,10 +42,19 @@ func main() {
 
 func run() error {
 	log := newLogger()
+	// The store reports a one-time key migration through the default logger.
+	slog.SetDefault(log)
 
 	cfg, err := config.Load()
 	if err != nil {
 		return err
+	}
+	// Removed with nothing to import: the log format is always text, and the
+	// first-run token is always generated into the data directory.
+	for _, k := range []string{"LOG_FORMAT", "POLYGLOT_LOG_FORMAT", "POLYGLOT_SETUP_TOKEN"} {
+		if os.Getenv(k) != "" {
+			log.Warn("environment variable is no longer read", "variable", k)
+		}
 	}
 
 	log.Info("starting Polyglot",
@@ -72,7 +82,7 @@ func run() error {
 	}
 	var setupGuard *setup.Guard
 	if adminCount == 0 {
-		setupGuard, err = setup.LoadOrCreate(cfg.DataDir, cfg.SetupToken)
+		setupGuard, err = setup.LoadOrCreate(cfg.DataDir, "")
 		if err != nil {
 			return err
 		}
@@ -93,19 +103,27 @@ func run() error {
 		log.Warn("load model prices", "error", err)
 	}
 
-	usageLogger := usage.New(st, log, cfg.LogRetentionDays, prices)
+	// Everything an operator tunes lives in the database now. The first start
+	// after an upgrade imports whatever the old environment variables said.
+	runtime, err := settings.Load(ctx, st, log, os.LookupEnv)
+	if err != nil {
+		return err
+	}
+	initial := runtime.Get()
+
+	usageLogger := usage.New(st, log, initial.LogRetentionDays, prices)
 	usageCtx, stopUsage := context.WithCancel(context.Background())
 	go usageLogger.Run(usageCtx)
 
 	// Observability is local only: metrics are held in this process until
 	// something the operator runs scrapes them, and spans go to the operator's
 	// own collector or nowhere. Polyglot has no telemetry endpoint of its own.
-	tel := telemetry.New(cfg.Telemetry, log)
+	tel := telemetry.New(telemetryConfig(initial), log)
 	defer tel.Shutdown(5 * time.Second)
 
 	srv := &http.Server{
 		Addr:    cfg.Listen,
-		Handler: api.NewServer(st, cfg, log, usageLogger, tel, prices, setupGuard).Handler(),
+		Handler: api.NewServer(st, cfg, runtime, log, usageLogger, tel, prices, setupGuard).Handler(),
 		// No WriteTimeout: streaming responses legitimately outlive any fixed
 		// deadline. Per-request limits come from the request context instead.
 		ReadHeaderTimeout: 20 * time.Second,
@@ -123,13 +141,8 @@ func run() error {
 	}()
 
 	if adminCount == 0 {
-		if path := setupGuard.Path(); path != "" {
-			log.Info("first run: open the WebUI and enter the setup token",
-				"url", publicURL(cfg.Listen), "setup_token_file", path)
-		} else {
-			log.Info("first run: open the WebUI and enter POLYGLOT_SETUP_TOKEN",
-				"url", publicURL(cfg.Listen))
-		}
+		log.Info("first run: open the WebUI and enter the setup token",
+			"url", publicURL(cfg.Listen), "setup_token_file", setupGuard.Path())
 	} else {
 		log.Info("Polyglot is ready", "url", publicURL(cfg.Listen))
 	}
@@ -164,13 +177,24 @@ func newLogger() *slog.Logger {
 	case "error":
 		level = slog.LevelError
 	}
-	var handler slog.Handler
-	if strings.ToLower(os.Getenv("LOG_FORMAT")) == "json" {
-		handler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level})
-	} else {
-		handler = slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: level})
+	return slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
+}
+
+// telemetryConfig builds the observability layer's configuration from the
+// stored settings. Polyglot has no telemetry endpoint of its own; with tracing
+// off nothing leaves the process.
+func telemetryConfig(v settings.Values) telemetry.Config {
+	return telemetry.Config{
+		Enabled:          v.MetricsEnabled || v.TracingEnabled,
+		Metrics:          v.MetricsEnabled,
+		MetricsToken:     v.MetricsToken,
+		Tracing:          v.TracingEnabled,
+		TraceSampleRatio: v.TraceSampleRatio,
+		OTLPEndpoint:     v.OTLPEndpoint,
+		OTLPHeaders:      v.OTLPHeaders,
+		ServiceName:      v.ServiceName,
+		ServiceVersion:   version.Version,
 	}
-	return slog.New(handler)
 }
 
 func webUIState(cfg *config.Config) string {

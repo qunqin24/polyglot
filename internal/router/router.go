@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/qunqin24/polyglot/internal/canonical"
@@ -28,12 +29,20 @@ const NamespaceSeparator = "::"
 // than being fixed when the router is built: one router serves every team, and
 // a resolution can never be made without naming whose registry it read.
 type Router struct {
-	defaultTimeout time.Duration
+	// defaultTimeout is a time.Duration, atomic because the operator can
+	// change it from the WebUI while requests are being routed.
+	defaultTimeout atomic.Int64
 }
 
 func New(defaultTimeout time.Duration) *Router {
-	return &Router{defaultTimeout: defaultTimeout}
+	r := &Router{}
+	r.SetDefaultTimeout(defaultTimeout)
+	return r
 }
+
+// SetDefaultTimeout changes the ceiling for providers that set none of their
+// own. Requests already in flight keep the one they started with.
+func (r *Router) SetDefaultTimeout(d time.Duration) { r.defaultTimeout.Store(int64(d)) }
 
 // Resolution is one candidate upstream for a request.
 type Resolution struct {
@@ -121,14 +130,13 @@ func (r *Router) resolveNamespaced(ctx context.Context, tm *store.Scope, provide
 		return nil, canonical.Errorf(canonical.ErrNotFound, "provider %q is disabled", p.Name)
 	}
 
-	target, err := r.targetFor(p)
-	if err != nil {
-		return nil, err
-	}
-
 	m, err := tm.ModelForProvider(ctx, p.ID, modelID)
 	switch {
 	case err == nil:
+		target, err := r.targetFor(p, m.ProtocolOverride, m.UpstreamModelID)
+		if err != nil {
+			return nil, err
+		}
 		return []Resolution{{
 			Alias: modelID, UpstreamModel: m.UpstreamModelID, Target: target, Via: ViaNamespace,
 		}}, nil
@@ -147,13 +155,13 @@ func (r *Router) resolveAlias(ctx context.Context, tm *store.Scope, alias string
 	}
 	out := make([]Resolution, 0, len(rows))
 	for _, a := range rows {
-		target, _, err := r.targetForID(ctx, tm, a.ProviderID)
-		if err != nil {
-			return nil, err
-		}
 		upstream := a.UpstreamModel
 		if upstream == "" {
 			upstream = alias
+		}
+		target, _, err := r.targetForID(ctx, tm, a.ProviderID, a.ProtocolOverride, upstream)
+		if err != nil {
+			return nil, err
 		}
 		out = append(out, Resolution{
 			Alias: alias, UpstreamModel: upstream, Target: target, Via: ViaAlias,
@@ -183,7 +191,7 @@ func (r *Router) resolveModel(ctx context.Context, tm *store.Scope, modelID stri
 	}
 	out := make([]Resolution, 0, len(models))
 	for _, m := range models {
-		target, p, err := r.targetForID(ctx, tm, m.ProviderID)
+		target, p, err := r.targetForID(ctx, tm, m.ProviderID, m.ProtocolOverride, m.UpstreamModelID)
 		if err != nil {
 			return nil, err
 		}
@@ -195,19 +203,24 @@ func (r *Router) resolveModel(ctx context.Context, tm *store.Scope, modelID stri
 	return out, nil
 }
 
-func (r *Router) targetForID(ctx context.Context, tm *store.Scope, providerID int64) (*provider.Target, *store.Provider, error) {
+func (r *Router) targetForID(ctx context.Context, tm *store.Scope, providerID int64, override, modelID string) (*provider.Target, *store.Provider, error) {
 	p, err := tm.GetProvider(ctx, providerID)
 	if err != nil {
 		return nil, nil, err
 	}
-	t, err := r.targetFor(p)
+	t, err := r.targetFor(p, override, modelID)
 	if err != nil {
 		return nil, nil, err
 	}
 	return t, p, nil
 }
 
-func (r *Router) targetFor(p *store.Provider) (*provider.Target, error) {
+// targetFor builds the upstream for one model of p. override is the model's
+// own protocol and modelID its upstream name; both matter only for a
+// provider with a built-in vendor, where the protocol picks the URL. An
+// ordinary provider always uses its own protocol and base URL, so a stray
+// override on one of its models cannot misdirect a request.
+func (r *Router) targetFor(p *store.Provider, override, modelID string) (*provider.Target, error) {
 	proto := protocol.Name(p.Protocol)
 	if !proto.Valid() {
 		return nil, canonical.Errorf(canonical.ErrInternal,
@@ -216,11 +229,11 @@ func (r *Router) targetFor(p *store.Provider) (*provider.Target, error) {
 	if err := provider.ValidateBaseURL(p.BaseURL); err != nil {
 		return nil, canonical.Errorf(canonical.ErrInternal, "provider %q: %v", p.Name, err)
 	}
-	timeout := r.defaultTimeout
+	timeout := time.Duration(r.defaultTimeout.Load())
 	if p.TimeoutSecs > 0 {
 		timeout = time.Duration(p.TimeoutSecs) * time.Second
 	}
-	return &provider.Target{
+	t := &provider.Target{
 		ID:           p.ID,
 		Name:         p.Name,
 		Protocol:     proto,
@@ -231,7 +244,16 @@ func (r *Router) targetFor(p *store.Provider) (*provider.Target, error) {
 		StrictFields: p.StrictFields,
 
 		AutoDisableOnAuthError: p.AutoDisableOnAuthError,
-	}, nil
+	}
+	if p.Vendor != "" {
+		v, ok := provider.VendorFor(p.Vendor)
+		if !ok {
+			return nil, canonical.Errorf(canonical.ErrInternal,
+				"provider %q has unknown vendor %q", p.Name, p.Vendor)
+		}
+		v.Apply(t, v.ProtocolFor(protocol.Name(override), modelID), p.ID)
+	}
+	return t, nil
 }
 
 // ModelEntry is one row of the client-facing model list.

@@ -14,6 +14,10 @@ export interface Provider {
   name: string;
   protocol: ProtocolName;
   base_url: string;
+  /** Built-in multi-protocol upstream ("opencode-go", "commandcode"); empty
+   *  for an ordinary provider. Its models each carry their own protocol, and
+   *  `protocol`/`base_url` are display only. */
+  vendor: string;
   /** The operator's own description. Nothing but the UI reads it. */
   note: string;
   has_api_key: boolean;
@@ -48,6 +52,8 @@ export interface Model {
   id: number;
   provider_id: number;
   provider_name: string;
+  /** The protocol this model is actually called with: its own on a
+   *  multi-protocol provider, the provider's otherwise. */
   protocol: ProtocolName;
   upstream_model_id: string;
   display_name: string;
@@ -58,6 +64,12 @@ export interface Model {
   price: Price;
   /** Another enabled provider offers the same id. */
   ambiguous?: boolean;
+  /** models.dev id of the company that made it ("zhipuai" for glm-5.2,
+   *  whoever serves it). Absent when the catalog does not know the id. */
+  maker?: string;
+  /** The maker's name for it on models.dev ("DeepSeek V4 Flash"). Absent when
+   *  the catalog does not know the id; use modelLabel() to display either way. */
+  catalog_name?: string;
   created_at: string;
   updated_at: string;
 }
@@ -131,6 +143,8 @@ export interface OfferedModel {
   display_name?: string;
   /** Already in the registry, so the picker shows it rather than offering it. */
   registered: boolean;
+  /** Set by multi-protocol vendors: the protocol this model will be called with. */
+  protocol?: ProtocolName;
 }
 
 /** The outcome of listing an upstream. A failure is not an error the operator
@@ -401,6 +415,79 @@ export interface CostStats {
   }[];
 }
 
+export type SpendRange = "24h" | "7d" | "30d" | "month";
+export type SpendDimension = "model" | "provider" | "key";
+
+/** The Overview's spend report. Like every cost in Polyglot it is an estimate
+ *  from published prices; unpriced requests are counted, never added as 0. */
+export interface SpendStats {
+  range: SpendRange;
+  from: number;
+  to: number;
+  prev_from: number;
+  /** Where the period would end if it ran its course (end of the month). */
+  period_end: number;
+  bucket_seconds: number;
+  cost_usd: number;
+  requests: number;
+  unpriced_requests: number;
+  prev_cost_usd: number;
+  prev_unpriced_requests: number;
+  input_tokens: number;
+  cached_input_tokens: number;
+  cache_write_tokens: number;
+  output_tokens: number;
+  reasoning_tokens: number;
+  cache_savings_usd: number;
+  cache_savings_partial: boolean;
+  dimension: SpendDimension;
+  starts: number[];
+  /** Up to five bands in `rows` order, then one with key "" for the rest. */
+  stacks: { key: string; provider_name?: string; points: number[] }[];
+  rows: {
+    key: string;
+    provider_name?: string;
+    cost_usd: number;
+    requests: number;
+    unpriced: number;
+    input_tokens: number;
+    output_tokens: number;
+  }[];
+  /** Display names for model ids in rows and stacks. */
+  names: Record<string, string>;
+  /** Set when request logs before this moment (Unix seconds) were pruned by
+   *  the retention setting and the previous period reaches back past it, so
+   *  its total is incomplete and must not be compared against. */
+  retained_since?: number;
+}
+
+/** One request as the live stream reports it. Times are Unix milliseconds. */
+export interface LiveRequest {
+  id: string;
+  started_at: number;
+  first_token_at: number | null;
+  ended_at: number | null;
+  model: string;
+  provider: string;
+  provider_id: number;
+  api_key: string;
+  client_protocol: string;
+  upstream_protocol: string;
+  stream: boolean;
+  status: "running" | "ok" | "error";
+  status_code: number;
+  error_type: string;
+  input_tokens: number;
+  output_tokens: number;
+  cost_usd: number | null;
+}
+
+export type LiveEvent =
+  | { type: "snapshot"; requests: LiveRequest[] }
+  | { type: "start" | "end"; request: LiveRequest }
+  | { type: "first_token"; id: string; at: number }
+  | { type: "progress"; id: string; output_tokens: number };
+
 export interface ContentLogSettings {
   enabled: boolean;
   retention_days: 3 | 7 | 30;
@@ -449,6 +536,35 @@ export interface Me {
   upstream_timeout: string;
   /** IANA name the WebUI formats every timestamp in. Always set; UTC by default. */
   timezone: string;
+}
+
+/** Settings edited on the WebUI's settings page; they used to be environment
+ *  variables. Metrics and tracing apply on restart, everything else at once. */
+export interface RuntimeSettings {
+  log_retention_days: number;
+  provider_cooldown_secs: number;
+  upstream_timeout_secs: number;
+  max_request_mb: number;
+  fetch_remote_media: boolean;
+  max_media_mb: number;
+  trust_proxy_headers: boolean;
+  block_private_upstream: boolean;
+  update_check_enabled: boolean;
+  update_repository: string;
+  metrics_enabled: boolean;
+  /** Read-only here: changed only by regenerating it. */
+  metrics_token: string;
+  tracing_enabled: boolean;
+  otlp_endpoint: string;
+  otlp_headers: Record<string, string> | null;
+  trace_sample_ratio: number;
+  service_name: string;
+}
+
+export interface RuntimeSettingsResponse {
+  settings: RuntimeSettings;
+  /** A saved metrics or tracing change is waiting for a restart. */
+  restart_pending: boolean;
 }
 
 export interface UpdateStatus {
@@ -531,12 +647,19 @@ export const api = {
     }),
   updateSettings: (settings: { timezone: string }) =>
     request<{ timezone: string }>("/api/settings", { method: "PUT", body: body(settings) }),
+  spend: (range: SpendRange, dim: SpendDimension) =>
+    request<SpendStats>(`/api/stats/spend?range=${range}&dim=${dim}`),
+  runtimeSettings: () => request<RuntimeSettingsResponse>("/api/settings/runtime"),
+  updateRuntimeSettings: (settings: RuntimeSettings) =>
+    request<RuntimeSettingsResponse>("/api/settings/runtime", { method: "PUT", body: body(settings) }),
+  regenerateMetricsToken: () =>
+    request<RuntimeSettingsResponse>("/api/settings/runtime/metrics-token", { method: "POST" }),
   login: (username: string, password: string) =>
     request<{ username: string }>("/api/auth/login", { method: "POST", body: body({ username, password }) }),
   logout: () => request<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
   me: () => request<Me>("/api/auth/me"),
-  updateStatus: (refresh = false) =>
-    request<UpdateStatus>(`/api/update${refresh ? "?refresh=true" : ""}`),
+  updateStatus: (refresh = false, signal?: AbortSignal) =>
+    request<UpdateStatus>(`/api/update${refresh ? "?refresh=true" : ""}`, { signal }),
   changePassword: (current_password: string, new_password: string) =>
     request<{ ok: boolean }>("/api/auth/password", {
       method: "POST",
@@ -560,14 +683,14 @@ export const api = {
     request<Provider>(`/api/providers/${id}`, { method: "PUT", body: body(p) }),
   deleteProvider: (id: number) =>
     request<{ ok: boolean }>(`/api/providers/${id}`, { method: "DELETE" }),
-  testProvider: (p: TestInput) =>
-    request<TestResult>("/api/providers/test", { method: "POST", body: body(p) }),
+  testProvider: (p: TestInput, signal?: AbortSignal) =>
+    request<TestResult>("/api/providers/test", { method: "POST", body: body(p), signal }),
   providerModels: (id: number) =>
     request<{ models: string[] }>(`/api/providers/${id}/models`),
   /** Ask an upstream what it offers. Works before the provider is saved, which
    *  is the point: the picker runs inside the add dialog. */
-  discoverModels: (p: TestInput) =>
-    request<ModelOffer>("/api/providers/discover", { method: "POST", body: body(p) }),
+  discoverModels: (p: TestInput, signal?: AbortSignal) =>
+    request<ModelOffer>("/api/providers/discover", { method: "POST", body: body(p), signal }),
   addProviderModels: (id: number, models: ModelChoice[]) =>
     request<{ added: number }>(`/api/providers/${id}/models`, {
       method: "POST",
@@ -609,10 +732,10 @@ export const api = {
     request<PricedModel>(`/api/models/${id}/pricing`, { method: "PUT", body: body(price) }),
   /** Pull current prices from models.dev. A failure is reported as ok:false —
    *  the catalog already loaded stays in place. */
-  refreshCatalog: () =>
+  refreshCatalog: (signal?: AbortSignal) =>
     request<{ ok: boolean; error?: string; catalog?: CatalogStatus }>(
       "/api/pricing/catalog/refresh",
-      { method: "POST" },
+      { method: "POST", signal },
     ),
   aliases: () => request<ModelAlias[]>("/api/aliases"),
   createAlias: (a: AliasInput) => request<ModelAlias>("/api/aliases", { method: "POST", body: body(a) }),
@@ -634,6 +757,10 @@ export const api = {
    *  covers it, even though it changes nothing. */
   revealKey: (id: number) =>
     request<{ secret: string }>(`/api/keys/${id}/secret`, { method: "POST" }),
+  /** Reads back the upstream credential stored on a provider. POST for the same
+   *  reason as revealKey; the list only ever says has_api_key. */
+  revealProviderKey: (id: number) =>
+    request<{ secret: string }>(`/api/providers/${id}/secret`, { method: "POST" }),
   deleteKey: (id: number) => request<{ ok: boolean }>(`/api/keys/${id}`, { method: "DELETE" }),
   keyOrigins: (id: number, days = 30) =>
     request<{ origins: KeyOrigin[]; days: number }>(`/api/keys/${id}/origins?days=${days}`),
@@ -663,6 +790,9 @@ export interface ProviderInput {
   name: string;
   protocol: ProtocolName;
   base_url: string;
+  /** Send the provider's `vendor` back on every update: an update writes every
+   *  field, so leaving it out turns a vendor provider into an ordinary one. */
+  vendor?: string;
   note: string;
   api_key: string | null;
   headers: Record<string, string>;
@@ -680,6 +810,7 @@ export interface TestInput {
   id: number;
   protocol: ProtocolName;
   base_url: string;
+  vendor?: string;
   api_key: string | null;
   headers: Record<string, string>;
   timeout_secs: number;

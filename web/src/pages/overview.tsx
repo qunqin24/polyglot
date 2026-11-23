@@ -1,94 +1,117 @@
 import * as React from "react";
-import { Link } from "react-router-dom";
+import { Link } from "@tanstack/react-router";
 import { ArrowRight, Server, KeyRound } from "lucide-react";
 import {
   api,
-  type APIKey,
   type ConversionStats,
-  type CostStats,
   type LatencyStats,
   type ModelStat,
   type RequestLog,
+  type SpendDimension,
+  type SpendRange,
 } from "@/lib/api";
 import { useAsync, useInterval } from "@/lib/hooks";
+import { BlockSkeleton, LoadingGate } from "@/components/kit/skeletons";
 import { useT, type TFunction } from "@/lib/i18n";
-import { cn, formatDuration, formatNumber, formatUSD } from "@/lib/utils";
-import { PageHeader } from "@/components/layout";
+import { cn, formatDuration, formatNumber } from "@/lib/utils";
+import { PageHeader } from "@/components/layout/page-header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge, ErrorBanner, Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/kit/misc";
 import {
-  Badge,
-  ErrorBanner,
-  Select,
-  Spinner,
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from "@/components/ui/misc";
-import { Button } from "@/components/ui/button";
-import {
-  CompositionBar,
   FlowChart,
   HeatMatrix,
   Histogram,
   Legend,
   PercentileChart,
-  Ring,
   Scatter,
   seriesColor,
-  Sparkline,
-  StackedBars,
-  TimelineChart,
-  Treemap,
-} from "@/components/ui/chart";
+} from "@/components/kit/chart";
+import { LivePanel } from "@/components/overview/live";
+import { Budgets, SpendChart, SpendFacts, SpendRuler, SpendTable, TokenSplit } from "@/components/overview/spend";
+import { SPEND_DIMENSIONS, SPEND_RANGES, spendColor, usd } from "@/components/overview/spend-format";
 
 /**
- * The Overview is two things stacked. Above: the numbers and the one timeline
- * everybody wants, always on screen. Below: three panels — conversion,
- * performance, spend — of which exactly one is mounted, so the page that gets
- * left open all day only pays for the charts somebody is looking at.
+ * The Overview answers two questions. Above: what this period is costing,
+ * where it is heading and where the money went — the spend report. In the
+ * middle: what is happening right now, from the live stream. Below: how the
+ * protocol conversion and latency look, one panel mounted at a time so the
+ * page people leave open only pays for what somebody is looking at.
  */
 export function Overview() {
   const t = useT();
-  const [hours, setHours] = React.useState("24");
-  const windowHours = Number(hours);
+  const [range, setRange] = React.useState<SpendRange>("month");
+  const [dim, setDim] = React.useState<SpendDimension>("model");
 
-  const stats = useAsync(() => api.stats(windowHours), ["stats", windowHours]);
+  const spend = useAsync(() => api.spend(range, dim), ["spend", range, dim], { keepPrevious: true });
+  // The live stream colours a model the way the spend chart does when it is
+  // split by model, whatever the chart is showing at the moment. With the
+  // chart on "model" this is the same request, shared through the cache.
+  const byModel = useAsync(() => api.spend(range, "model"), ["spend", range, "model"], { keepPrevious: true });
   const providers = useAsync(() => api.providers(), ["providers"]);
   const keys = useAsync(() => api.keys(), ["keys"]);
+  const models = useAsync(() => api.models({ limit: 2000 }), ["models", "", "", 2000]);
 
-  // The Overview is the page people leave open, so it refreshes itself. The
-  // panels below refresh with it only in the sense that switching tabs
-  // remounts them; nothing polls a panel nobody is watching.
-  useInterval(() => stats.reload(), 15000);
+  useInterval(() => {
+    void spend.reload();
+    if (dim !== "model") void byModel.reload();
+  }, 30_000);
 
-  const s = stats.data;
-  const successRate =
-    s && s.total_requests > 0 ? (s.success_count / s.total_requests) * 100 : null;
+  const names = React.useMemo(() => {
+    const out: Record<string, string> = { ...(byModel.data?.names ?? {}) };
+    for (const m of models.data?.models ?? []) {
+      if (m.catalog_name) out[m.upstream_model_id] = m.catalog_name;
+    }
+    return out;
+  }, [byModel.data, models.data]);
 
-  // Models no longer need configuring: a provider discovers its own. Setup is
-  // done once there is a provider and a key.
+  const colorFor = React.useCallback(
+    (model: string) => {
+      const stacks = byModel.data?.stacks ?? [];
+      const i = stacks.findIndex((b) => b.key === model);
+      return i >= 0 ? spendColor(i) : spendColor(5, true);
+    },
+    [byModel.data],
+  );
+
+  // The conversion and latency panels take hours; "this month" is however
+  // many hours the month has run.
+  const panelHours =
+    range === "24h"
+      ? 24
+      : range === "7d"
+        ? 168
+        : range === "30d"
+          ? 720
+          : Math.max(1, Math.ceil((Date.now() / 1000 - (spend.data?.from ?? Date.now() / 1000 - 86400)) / 3600));
+
   const needsSetup =
     !providers.loading &&
     !keys.loading &&
     ((providers.data?.length ?? 0) === 0 || (keys.data?.length ?? 0) === 0);
 
+  const s = spend.data;
+  const rangeLabels: Record<SpendRange, string> = {
+    "24h": t("spend.range24h"),
+    "7d": t("spend.range7d"),
+    "30d": t("spend.range30d"),
+    month: t("spend.rangeMonth"),
+  };
+  const dimLabels: Record<SpendDimension, string> = {
+    model: t("spend.byModel"),
+    provider: t("spend.byProvider"),
+    key: t("spend.byKey"),
+  };
+
   return (
     <>
       <PageHeader
         title={t("overview.title")}
-        description={t("overview.description")}
         action={
-          <Select
-            value={hours}
-            onValueChange={setHours}
-            className="w-36"
-            options={[
-              { value: "1", label: t("overview.lastHour") },
-              { value: "24", label: t("overview.last24Hours") },
-              { value: "168", label: t("overview.last7Days") },
-              { value: "720", label: t("overview.last30Days") },
-            ]}
+          <Segmented
+            label={t("spend.rangeLabel")}
+            value={range}
+            onChange={setRange}
+            options={SPEND_RANGES.map((r) => ({ value: r, label: rangeLabels[r] }))}
           />
         }
       />
@@ -101,180 +124,164 @@ export function Overview() {
         />
       )}
 
-      <ErrorBanner message={stats.error} />
+      <ErrorBanner message={spend.error} onRetry={() => void spend.reload()} />
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-        <Stat
-          label={t("overview.requests")}
-          value={s ? formatNumber(s.total_requests) : "—"}
-          loading={stats.loading && !s}
-          trend={s?.series.map((b) => b.count)}
-        />
-        {/* No sparkline under the next two. A bucket nobody called in has no
-            success rate and no latency, and a line has to have a value for
-            every point — so it would draw a quiet night as a perfect one. */}
-        <Stat
-          label={t("overview.successRate")}
-          value={successRate === null ? "—" : `${successRate.toFixed(1)}%`}
-          tone={successRate !== null && successRate < 95 ? "warn" : undefined}
-          loading={stats.loading && !s}
-          sub={
-            s && s.error_count > 0
-              ? t("overview.errorCount", { count: formatNumber(s.error_count) })
-              : undefined
-          }
-        />
-        <Stat
-          label={t("overview.latency")}
-          value={s ? formatDuration(s.avg_latency_ms) : "—"}
-          sub={
-            s && s.p95_latency_ms > 0
-              ? t("overview.p95", { value: formatDuration(s.p95_latency_ms) })
-              : undefined
-          }
-          loading={stats.loading && !s}
-        />
-        {/* An estimate from a published price list, not a bill. The count of
-            requests nobody could price sits under it, because a total with
-            silent gaps in it reads as a complete one. */}
-        <Stat
-          label={t("overview.cost")}
-          value={s ? formatUSD(s.cost_usd) : "—"}
-          sub={
-            s && s.unpriced_requests > 0
-              ? t("overview.costUnpriced", { count: formatNumber(s.unpriced_requests) })
-              : undefined
-          }
-          loading={stats.loading && !s}
-          trend={s?.series.map((b) => b.cost_usd)}
-          trendColor="var(--color-chart-3)"
-        />
-        <Stat
-          label={t("overview.tokens")}
-          value={s ? formatNumber(s.input_tokens + s.output_tokens) : "—"}
-          sub={
-            s
-              ? t("overview.tokenSplit", {
-                  input: formatNumber(s.input_tokens),
-                  output: formatNumber(s.output_tokens),
-                })
-              : undefined
-          }
-          loading={stats.loading && !s}
-          trend={s?.series.map((b) => b.input_tokens + b.output_tokens)}
-          trendColor="var(--color-chart-4)"
-        />
-      </div>
-
-      {/* Traffic, and where it went, in one card. They were two, and two
-          cards cost two headers and two sets of padding to say one thing. */}
-      <Card className="mt-4">
-        <CardHeader className="flex-row items-center justify-between">
-          <CardTitle>{t("overview.timeline")}</CardTitle>
-          <div className="flex items-center gap-3">
-            <Legend
-              items={[
-                { label: t("overview.timelineTotal"), color: "var(--color-chart-1)" },
-                { label: t("overview.timelineErrors"), color: "var(--color-destructive)" },
-              ]}
-            />
-            <span className="text-[11px] text-muted-foreground">
-              {s ? bucketLabel(s.bucket_seconds, t) : ""}
-            </span>
-            <Button variant="ghost" size="sm" asChild>
-              <Link to="/logs">
-                {t("overview.allLogs")} <ArrowRight className="size-3.5" />
-              </Link>
-            </Button>
-          </div>
-        </CardHeader>
-        <CardContent>
-          {s ? (
-            <TimelineChart
-              total={s.series.map((b) => b.count)}
-              errors={s.series.map((b) => b.errors)}
-              height={72}
-            />
-          ) : (
-            <div className="flex h-[72px] items-center justify-center">
-              <Spinner className="text-muted-foreground" />
-            </div>
-          )}
-
-          <div className="mt-4 border-t pt-3">
-            <p className="mb-2 text-xs text-muted-foreground">{t("nav.providers")}</p>
-            {providers.loading && !providers.data ? (
-              <Spinner className="text-muted-foreground" />
-            ) : (providers.data?.length ?? 0) === 0 ? (
-              <p className="text-sm text-muted-foreground">{t("overview.noProviders")}</p>
-            ) : (
-              <div className="space-y-1.5">
-                {providers.data!.map((p) => {
-                  const usage = s?.by_provider?.find((x) => x.provider_name === p.name);
-                  const share =
-                    usage && s && s.total_requests > 0 ? usage.count / s.total_requests : 0;
-                  return (
-                    <div key={p.id} className="flex items-center gap-3">
-                      <span
-                        className={cn(
-                          "size-1.5 shrink-0 rounded-full",
-                          p.enabled ? "bg-[--color-success]" : "bg-muted-foreground/40",
-                        )}
-                      />
-                      <span className="w-36 shrink-0 truncate text-sm">{p.name}</span>
-                      <span className="w-28 shrink-0 truncate text-xs text-muted-foreground">
-                        {p.protocol}
-                      </span>
-                      <div className="h-1 min-w-8 flex-1 rounded-full bg-muted">
-                        <div
-                          className="h-1 rounded-full bg-[--color-chart-1]"
-                          style={{ width: `${Math.max(share > 0 ? 2 : 0, share * 100)}%` }}
-                        />
-                      </div>
-                      {usage && usage.error_count > 0 && (
-                        <span className="shrink-0 text-xs text-destructive">
-                          {t("overview.errorCount", { count: usage.error_count })}
-                        </span>
-                      )}
-                      <span className="w-12 shrink-0 text-right text-sm tabular-nums">
-                        {usage ? formatNumber(usage.count) : "0"}
-                      </span>
-                    </div>
-                  );
-                })}
+      {s ? (
+        <div className={cn("transition-opacity", spend.stale && "opacity-60")} aria-busy={spend.refreshing}>
+          <SpendRuler stats={s} />
+          <SpendFacts stats={s} />
+        </div>
+      ) : (
+        <LoadingGate
+          loading={spend.initialLoading}
+          skeleton={
+            <div className="mb-7 space-y-5">
+              <BlockSkeleton className="h-24" />
+              <div className="grid gap-3 md:grid-cols-3">
+                <BlockSkeleton className="h-[86px]" />
+                <BlockSkeleton className="h-[86px]" />
+                <BlockSkeleton className="h-[86px]" />
               </div>
-            )}
-          </div>
+            </div>
+          }
+        >
+          {null}
+        </LoadingGate>
+      )}
+
+      <LivePanel colorFor={colorFor} names={names} />
+
+      <Card>
+        <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3">
+          <CardTitle>{s && s.bucket_seconds < 86400 ? t("spend.perHour") : t("spend.perDay")}</CardTitle>
+          <Segmented
+            label={t("spend.dimLabel")}
+            value={dim}
+            onChange={setDim}
+            options={SPEND_DIMENSIONS.map((d) => ({ value: d, label: dimLabels[d] }))}
+          />
+        </CardHeader>
+        <CardContent className={cn("transition-opacity", spend.stale && "opacity-60")}>
+          {s ? (
+            <SpendChart stats={s} />
+          ) : (
+            <LoadingGate loading={spend.initialLoading} skeleton={<BlockSkeleton className="h-[220px]" />}>
+              {null}
+            </LoadingGate>
+          )}
         </CardContent>
       </Card>
+
+      <div className="mt-4 grid gap-4 xl:grid-cols-[1.6fr_1fr]">
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between">
+            <CardTitle>{dimLabels[dim]}</CardTitle>
+            {s && (
+              <span className="text-xs text-muted-foreground">
+                {t("spend.shareOf", { total: usd(s.cost_usd) })}
+              </span>
+            )}
+          </CardHeader>
+          <CardContent className={cn("transition-opacity", spend.stale && "opacity-60")}>
+            {s ? (
+              <SpendTable stats={s} />
+            ) : (
+              <LoadingGate loading={spend.initialLoading} skeleton={<BlockSkeleton className="h-64" />}>
+                {null}
+              </LoadingGate>
+            )}
+          </CardContent>
+        </Card>
+        <div className="grid content-start gap-4">
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between">
+              <CardTitle>{t("spend.tokens")}</CardTitle>
+              {s && (
+                <span className="text-xs text-muted-foreground">
+                  {formatNumber(s.input_tokens + s.output_tokens)} Token
+                </span>
+              )}
+            </CardHeader>
+            <CardContent>
+              {s ? (
+                <TokenSplit stats={s} />
+              ) : (
+                <LoadingGate loading={spend.initialLoading} skeleton={<BlockSkeleton className="h-28" />}>
+                  {null}
+                </LoadingGate>
+              )}
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between">
+              <CardTitle>{t("spend.budgets")}</CardTitle>
+              <span className="text-xs text-muted-foreground">{t("spend.budgetsNote")}</span>
+            </CardHeader>
+            <CardContent>
+              {keys.data ? (
+                <Budgets keys={keys.data} />
+              ) : (
+                <LoadingGate loading={keys.initialLoading} skeleton={<BlockSkeleton className="h-28" />}>
+                  {null}
+                </LoadingGate>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      </div>
 
       {/* Radix unmounts the panel that is not selected, which is the point:
           each one fetches its own numbers when it is opened and stops costing
           anything the moment it is not. */}
-      <Tabs defaultValue="conversion" className="mt-6">
+      <Tabs defaultValue="conversion" className="mt-8">
         <TabsList>
           <TabsTrigger value="conversion">{t("overview.panelConversion")}</TabsTrigger>
           <TabsTrigger value="latency">{t("overview.panelLatency")}</TabsTrigger>
-          <TabsTrigger value="cost">{t("overview.panelCost")}</TabsTrigger>
         </TabsList>
-        {/* The panel being switched away from is unmounted, and the one
-            arriving renders a spinner first. Without a floor under them the
-            document collapses to that spinner's height, the browser clamps a
-            scroll position that no longer exists, and the page jumps to the
-            top. The floor is what keeps you where you were standing. */}
+        {/* A floor under the panels keeps the scroll position when one is
+            swapped for the other and the new one is still loading. */}
         <div className="mt-4 min-h-[36rem]">
           <TabsContent value="conversion">
-            <ConversionPanel hours={windowHours} />
+            <ConversionPanel hours={panelHours} />
           </TabsContent>
           <TabsContent value="latency">
-            <LatencyPanel hours={windowHours} />
-          </TabsContent>
-          <TabsContent value="cost">
-            <CostPanel hours={windowHours} keys={keys.data ?? []} />
+            <LatencyPanel hours={panelHours} />
           </TabsContent>
         </div>
       </Tabs>
     </>
+  );
+}
+
+/** A small segmented control: a group of toggle buttons, one pressed. */
+function Segmented<T extends string>({
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  label: string;
+  value: T;
+  onChange: (v: T) => void;
+  options: { value: T; label: string }[];
+}) {
+  return (
+    <div role="group" aria-label={label} className="inline-flex rounded-lg bg-muted p-[3px]">
+      {options.map((o) => (
+        <button
+          key={o.value}
+          type="button"
+          aria-pressed={o.value === value}
+          onClick={() => onChange(o.value)}
+          className={cn(
+            "rounded-md px-2.5 py-1 text-[13px] text-muted-foreground transition-colors",
+            o.value === value ? "bg-background text-foreground shadow-xs" : "hover:text-foreground",
+          )}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -287,35 +294,49 @@ function bucketLabel(seconds: number, t: TFunction): string {
 
 function PanelFrame({
   loading,
+  stale,
   error,
+  onRetry,
   empty,
   children,
   t,
 }: {
   loading: boolean;
+  /** The numbers on screen are from the previous time window. */
+  stale?: boolean;
   error: string;
+  onRetry?: () => void;
   empty: boolean;
   children: React.ReactNode;
   t: TFunction;
 }) {
-  if (error) return <ErrorBanner message={error} />;
-  if (loading) {
-    return (
-      <div className="flex min-h-[32rem] items-center justify-center">
-        <Spinner className="text-muted-foreground" />
-      </div>
-    );
-  }
-  if (empty) {
-    return (
-      <Card>
-        <CardContent className="flex min-h-[28rem] items-center justify-center text-sm text-muted-foreground">
-          {t("overview.panelEmpty")}
-        </CardContent>
-      </Card>
-    );
-  }
-  return <>{children}</>;
+  if (error) return <ErrorBanner message={error} onRetry={onRetry} />;
+  return (
+    <LoadingGate
+      loading={loading}
+      skeleton={
+        <div className="min-h-[32rem] space-y-4">
+          <BlockSkeleton className="h-64 rounded-xl" />
+          <div className="grid gap-4 lg:grid-cols-2">
+            <BlockSkeleton className="h-48 rounded-xl" />
+            <BlockSkeleton className="h-48 rounded-xl" />
+          </div>
+        </div>
+      }
+    >
+      {empty ? (
+        <Card>
+          <CardContent className="flex min-h-[28rem] items-center justify-center text-sm text-muted-foreground">
+            {t("overview.panelEmpty")}
+          </CardContent>
+        </Card>
+      ) : (
+        <div aria-busy={stale || undefined} className={cn("transition-opacity duration-200", stale && "opacity-60")}>
+          {children}
+        </div>
+      )}
+    </LoadingGate>
+  );
 }
 
 // --- conversion -------------------------------------------------------------
@@ -324,7 +345,7 @@ function PanelFrame({
  *  out, and what did not survive between them. */
 function ConversionPanel({ hours }: { hours: number }) {
   const t = useT();
-  const conv = useAsync(() => api.conversionStats(hours), ["conversion-stats", hours]);
+  const conv = useAsync(() => api.conversionStats(hours), ["conversion-stats", hours], { keepPrevious: true });
   const protocols = useAsync(() => api.protocols(), ["protocols"]);
 
   const c: ConversionStats | null = conv.data;
@@ -337,7 +358,9 @@ function ConversionPanel({ hours }: { hours: number }) {
 
   return (
     <PanelFrame
-      loading={conv.loading && !c}
+      loading={conv.initialLoading}
+      stale={conv.stale}
+      onRetry={() => void conv.reload()}
       error={conv.error}
       empty={!!c && c.total_requests === 0}
       t={t}
@@ -346,7 +369,7 @@ function ConversionPanel({ hours }: { hours: number }) {
         <div className="space-y-4">
           <div className="grid gap-4 lg:grid-cols-5">
             <Card className="lg:col-span-3">
-              <CardHeader className="flex-row items-baseline justify-between">
+              <CardHeader className="flex flex-row items-baseline justify-between">
                 <CardTitle>{t("overview.matrix")}</CardTitle>
                 {/* These two summarise the matrix, so they sit on it rather
                     than in a row of cards of their own. The request count that
@@ -462,7 +485,7 @@ function fidelityTone(f: ConversionStats["fields"][number]["fidelity"]) {
  *  because an average is exactly the number that hides a bad tail. */
 function LatencyPanel({ hours }: { hours: number }) {
   const t = useT();
-  const lat = useAsync(() => api.latencyStats(hours), ["latency-stats", hours]);
+  const lat = useAsync(() => api.latencyStats(hours), ["latency-stats", hours], { keepPrevious: true });
   const models = useAsync(() => api.modelStats(hours), ["model-stats", hours]);
 
   const l: LatencyStats | null = lat.data;
@@ -493,11 +516,11 @@ function LatencyPanel({ hours }: { hours: number }) {
     }));
 
   return (
-    <PanelFrame loading={lat.loading && !l} error={lat.error} empty={!!l && requests === 0} t={t}>
+    <PanelFrame loading={lat.initialLoading} stale={lat.stale} onRetry={() => void lat.reload()} error={lat.error} empty={!!l && requests === 0} t={t}>
       {l && (
         <div className="space-y-4">
           <Card>
-            <CardHeader className="flex-row items-center justify-between">
+            <CardHeader className="flex flex-row items-center justify-between">
               <CardTitle>{t("overview.percentiles")}</CardTitle>
               <Legend
                 items={[
@@ -607,197 +630,6 @@ function LatencyPanel({ hours }: { hours: number }) {
   );
 }
 
-// --- spend ------------------------------------------------------------------
-
-/** Cost visibility, not a bill. Every number here is an estimate from a
- *  published price list, and the requests nobody could price are counted
- *  beside it rather than quietly added in as free. */
-function CostPanel({ hours, keys }: { hours: number; keys: APIKey[] }) {
-  const t = useT();
-  const cost = useAsync(() => api.costStats(hours), ["cost-stats", hours]);
-  const c: CostStats | null = cost.data;
-
-  const budgeted = keys.filter((k) => k.budget_usd !== null && k.budget_usd > 0);
-  const uncached = c ? Math.max(0, c.input_tokens - c.cached_input_tokens - c.cache_write_tokens) : 0;
-  const priced = c?.models.filter((m) => m.cost_usd > 0) ?? [];
-
-  return (
-    <PanelFrame
-      loading={cost.loading && !c}
-      error={cost.error}
-      empty={!!c && c.models.length === 0}
-      t={t}
-    >
-      {c && (
-        <div className="space-y-4">
-          <div className="grid gap-4 lg:grid-cols-5">
-            <Card className="lg:col-span-3">
-              <CardHeader className="flex-row items-center justify-between">
-                <CardTitle>{t("overview.spendOverTime")}</CardTitle>
-                <span className="text-[11px] text-muted-foreground">
-                  {bucketLabel(c.bucket_seconds, t)}
-                </span>
-              </CardHeader>
-              <CardContent>
-                {c.stacks.length === 0 ? (
-                  <p className="py-10 text-center text-sm text-muted-foreground">
-                    {t("overview.noSpend")}
-                  </p>
-                ) : (
-                  <>
-                    <StackedBars starts={c.starts} stacks={c.stacks.map((s) => ({
-                      label: s.model || t("overview.otherModels"),
-                      points: s.points,
-                    }))} format={formatUSD} />
-                    <div className="mt-3">
-                      <Legend
-                        items={c.stacks.map((s, i) => ({
-                          label: s.model || t("overview.otherModels"),
-                          color: seriesColor(i),
-                        }))}
-                      />
-                    </div>
-                  </>
-                )}
-                {c.unpriced_requests > 0 && (
-                  <p className="mt-3 text-xs text-muted-foreground">
-                    {t("overview.costUnpriced", { count: formatNumber(c.unpriced_requests) })}
-                  </p>
-                )}
-              </CardContent>
-            </Card>
-
-            <Card className="lg:col-span-2">
-              <CardHeader>
-                <CardTitle>{t("overview.spendByModel")}</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {priced.length === 0 ? (
-                  <p className="py-10 text-center text-sm text-muted-foreground">
-                    {t("overview.noSpend")}
-                  </p>
-                ) : (
-                  <Treemap
-                    items={priced.slice(0, 8).map((m) => ({
-                      key: `${m.provider_name}/${m.model}`,
-                      value: m.cost_usd,
-                      title: m.model,
-                      subtitle: m.provider_name,
-                    }))}
-                    label={(item) => `${item.key} · ${formatUSD(item.value)}`}
-                  />
-                )}
-              </CardContent>
-            </Card>
-          </div>
-
-          <div className="grid gap-4 lg:grid-cols-2">
-            <Card>
-              <CardHeader>
-                <CardTitle>{t("overview.tokenComposition")}</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div>
-                  <p className="mb-1.5 text-xs text-muted-foreground">
-                    {t("overview.tokensIn", { value: formatNumber(c.input_tokens) })}
-                  </p>
-                  <CompositionBar
-                    parts={[
-                      {
-                        label: t("overview.cachedRead"),
-                        value: c.cached_input_tokens,
-                        color: "var(--color-chart-2)",
-                      },
-                      { label: t("overview.uncached"), value: uncached, color: "var(--color-chart-1)" },
-                      {
-                        label: t("overview.cacheWrite"),
-                        value: c.cache_write_tokens,
-                        color: "var(--color-chart-6)",
-                      },
-                    ]}
-                  />
-                </div>
-                <div>
-                  <p className="mb-1.5 text-xs text-muted-foreground">
-                    {t("overview.tokensOut", { value: formatNumber(c.output_tokens) })}
-                  </p>
-                  <CompositionBar
-                    parts={[
-                      { label: t("overview.tokensOut", { value: "" }), value: c.output_tokens, color: "var(--color-chart-3)" },
-                    ]}
-                  />
-                </div>
-                <Legend
-                  items={[
-                    { label: t("overview.cachedRead"), color: "var(--color-chart-2)" },
-                    { label: t("overview.uncached"), color: "var(--color-chart-1)" },
-                    { label: t("overview.cacheWrite"), color: "var(--color-chart-6)" },
-                  ]}
-                />
-                {/* Reasoning is reported beside the output, never as a slice of
-                    it: providers disagree about whether it is already in
-                    there, so any stacked bar would be wrong for some of them. */}
-                <div className="flex items-baseline justify-between border-t pt-3">
-                  <span className="text-xs text-muted-foreground">{t("overview.reasoning")}</span>
-                  <span className="text-sm tabular-nums">{formatNumber(c.reasoning_tokens)}</span>
-                </div>
-                <p className="text-xs text-muted-foreground">{t("overview.reasoningAside")}</p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>{t("overview.budgets")}</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {budgeted.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">{t("overview.noBudgets")}</p>
-                ) : (
-                  <>
-                    <div className="space-y-3">
-                      {budgeted.map((k) => {
-                        const spent = k.spent_usd ?? 0;
-                        const limit = k.budget_usd!;
-                        const fraction = spent / limit;
-                        return (
-                          <div key={k.id} className="flex items-center gap-3">
-                            <Ring
-                              fraction={fraction}
-                              tone={fraction >= 1 ? "over" : fraction >= 0.8 ? "warn" : "normal"}
-                            />
-                            <div className="min-w-0">
-                              <p className="truncate text-sm">{k.name}</p>
-                              <p className="text-xs text-muted-foreground">
-                                {t("overview.budgetOf", {
-                                  spent: formatUSD(spent),
-                                  limit: formatUSD(limit),
-                                })}{" "}
-                                · {t(`overview.period${periodKey(k.budget_period)}`)}
-                              </p>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                    <p className="mt-3 text-xs text-muted-foreground">{t("overview.budgetsHint")}</p>
-                  </>
-                )}
-              </CardContent>
-            </Card>
-          </div>
-        </div>
-      )}
-    </PanelFrame>
-  );
-}
-
-function periodKey(p: APIKey["budget_period"]): "Total" | "Daily" | "Weekly" | "Monthly" {
-  if (p === "daily") return "Daily";
-  if (p === "weekly") return "Weekly";
-  if (p === "monthly") return "Monthly";
-  return "Total";
-}
-
 /** Drops the buckets at both ends that carried no requests, keeping every
  *  bucket between the first and the last that did — including the empty ones,
  *  which are a real gap in a run of traffic rather than time before it
@@ -817,45 +649,15 @@ function share(n: number, total: number): string {
   return `${((n / total) * 100).toFixed(1)}%`;
 }
 
-function Stat({
-  label,
-  value,
-  sub,
-  tone,
-  loading,
-  trend,
-  trendColor,
-}: {
-  label: string;
-  value: string;
-  sub?: string;
-  tone?: "warn";
-  loading?: boolean;
-  /** Drawn only where a quiet bucket honestly means zero — counts, tokens,
-      money. Never a rate or a latency. */
-  trend?: number[];
-  trendColor?: string;
-}) {
-  return (
-    <Card>
-      <CardContent className="p-4">
-        <p className="text-xs text-muted-foreground">{label}</p>
-        <p
-          className={cn(
-            "mt-1.5 text-2xl font-semibold tabular-nums tracking-tight",
-            tone === "warn" && "text-[--color-warning]",
-            loading && "opacity-50",
-          )}
-        >
-          {value}
-        </p>
-        {sub && <p className="mt-0.5 text-xs text-muted-foreground">{sub}</p>}
-        {trend && trend.length > 1 && (
-          <Sparkline values={trend} color={trendColor} className="mt-1.5" />
-        )}
-      </CardContent>
-    </Card>
-  );
+export function StatusBadge({ log }: { log: RequestLog }) {
+  const t = useT();
+  if (log.status === "success") {
+    return <Badge variant="success">{log.status_code}</Badge>;
+  }
+  if (log.status === "cancelled") {
+    return <Badge variant="warning">{t("overview.cancelled")}</Badge>;
+  }
+  return <Badge variant="destructive">{log.status_code || t("logs.errorLabel")}</Badge>;
 }
 
 export function ProtocolFlow({ log }: { log: RequestLog }) {
@@ -875,17 +677,6 @@ export function ProtocolFlow({ log }: { log: RequestLog }) {
       )}
     </span>
   );
-}
-
-export function StatusBadge({ log }: { log: RequestLog }) {
-  const t = useT();
-  if (log.status === "success") {
-    return <Badge variant="success">{log.status_code}</Badge>;
-  }
-  if (log.status === "cancelled") {
-    return <Badge variant="warning">{t("overview.cancelled")}</Badge>;
-  }
-  return <Badge variant="destructive">{log.status_code || t("logs.errorLabel")}</Badge>;
 }
 
 function GettingStarted({

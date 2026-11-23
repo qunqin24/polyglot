@@ -25,10 +25,12 @@ import (
 	"github.com/qunqin24/polyglot/internal/canonical"
 	"github.com/qunqin24/polyglot/internal/capture"
 	"github.com/qunqin24/polyglot/internal/config"
+	"github.com/qunqin24/polyglot/internal/live"
 	"github.com/qunqin24/polyglot/internal/media"
 	"github.com/qunqin24/polyglot/internal/protocol"
 	"github.com/qunqin24/polyglot/internal/provider"
 	"github.com/qunqin24/polyglot/internal/router"
+	"github.com/qunqin24/polyglot/internal/settings"
 	"github.com/qunqin24/polyglot/internal/store"
 	"github.com/qunqin24/polyglot/internal/stream"
 	"github.com/qunqin24/polyglot/internal/telemetry"
@@ -36,22 +38,29 @@ import (
 )
 
 type Gateway struct {
-	Store     *store.Store
-	Router    *router.Router
-	Client    *provider.Client
-	Usage     *usage.Logger
-	Config    *config.Config
+	Store  *store.Store
+	Router *router.Router
+	Client *provider.Client
+	Usage  *usage.Logger
+	Config *config.Config
+	// Settings are the WebUI-editable values, read per request so a change
+	// applies to the next one.
+	Settings  *settings.Manager
 	Log       *slog.Logger
 	Telemetry *telemetry.Telemetry
 	// Health remembers which upstreams just failed, so a client's own retry
 	// is not sent back to the same broken one.
 	Health *provider.Health
-	// Media downloads attachments a client referenced by URL. Nil unless
-	// FETCH_REMOTE_MEDIA is on, in which case a URL bound for a protocol that
-	// cannot fetch one is reported instead.
+	// Media downloads attachments a client referenced by URL. It is used only
+	// while "fetch remote media" is on in the settings; otherwise a URL bound
+	// for a protocol that cannot fetch one is reported instead.
 	Media *media.Fetcher
 	// KeyLimiter enforces client-key quotas across every protocol endpoint.
 	KeyLimiter *auth.KeyLimiter
+	// LiveView is told when a request starts, produces its first token and reports
+	// progress, for the WebUI's live view. The end of a request is reported by
+	// the usage logger, which is where its cost is known. Optional.
+	LiveView *live.Hub
 }
 
 // Options describe the inbound endpoint. Gemini puts the model and the
@@ -175,7 +184,7 @@ func (g *Gateway) Chat(w http.ResponseWriter, r *http.Request, opt Options) {
 		return
 	}
 
-	body, cerr := readBody(w, r, g.Config.MaxRequestBytes)
+	body, cerr := readBody(w, r, g.Settings.Get().MaxRequestBytes())
 	if cerr != nil {
 		g.fail(w, opt.ClientProtocol, rec, cerr)
 		return
@@ -344,6 +353,35 @@ type attempt struct {
 	// tried is this attempt's telemetry span, kept so the caller can attribute
 	// a retry to the provider that failed.
 	tried *telemetry.Attempt
+
+	// Live-view bookkeeping: whether first_token went out, and when the last
+	// progress did (at most one a second).
+	firstSent    bool
+	lastProgress time.Time
+}
+
+// liveFirstToken tells the live view the reply has begun. Once per attempt.
+func (a *attempt) liveFirstToken() {
+	if a.firstSent || a.gw.LiveView == nil {
+		return
+	}
+	a.firstSent = true
+	a.gw.LiveView.Publish(live.FirstToken(a.rec.TeamID, a.rec.RequestID, time.Now()))
+}
+
+// liveProgress reports an output token count the upstream itself stated. It is
+// never an estimate: a stream whose upstream only reports usage at the end
+// sends no progress, and the dashboard works the rate out for itself.
+func (a *attempt) liveProgress(outputTokens int) {
+	if a.gw.LiveView == nil || outputTokens <= 0 {
+		return
+	}
+	now := time.Now()
+	if now.Sub(a.lastProgress) < time.Second {
+		return
+	}
+	a.lastProgress = now
+	a.gw.LiveView.Publish(live.Progress(a.rec.TeamID, a.rec.RequestID, outputTokens))
 }
 
 // fail closes the attempt's telemetry with an error class and returns the
@@ -404,6 +442,11 @@ func (a *attempt) run(w http.ResponseWriter, r *http.Request) attemptResult {
 	a.rec.UpstreamProtocol = string(t.Protocol)
 	a.rec.UpstreamModel = a.cand.UpstreamModel
 	a.tried = a.tel.StartAttempt(t.Name, string(t.Protocol), a.cand.UpstreamModel)
+	// The request is announced with the first attempt's provider and model;
+	// a fallback only changes what the final event says.
+	if a.number == 1 && g.LiveView != nil {
+		g.LiveView.Publish(live.Start(a.rec.TeamID, live.FromLog(a.rec)))
+	}
 
 	upCodec, err := protocol.Get(t.Protocol)
 	if err != nil {
@@ -429,7 +472,7 @@ func (a *attempt) run(w http.ResponseWriter, r *http.Request) attemptResult {
 	// Gemini does not fetch a remote attachment itself. When the operator has
 	// allowed it, download the bytes here so the image survives; otherwise the
 	// codec below reports it, which is the honest default.
-	if g.Media != nil && !protocol.AcceptsMediaURL(t.Protocol) {
+	if g.Media != nil && g.Settings.Get().FetchRemoteMedia && !protocol.AcceptsMediaURL(t.Protocol) {
 		g.Media.Inline(r.Context(), &upReq, a.diag.WithStage("media"))
 	}
 
@@ -488,6 +531,9 @@ func (a *attempt) bufferedResponse(w http.ResponseWriter, resp *http.Response, u
 		b, _ := json.Marshal(cresp)
 		a.content.Body(capture.Stage{ID: fmt.Sprintf("upstream.%d.canonical", a.number), Kind: "canonical_response", Attempt: a.number}, b)
 	}
+	// A buffered reply has no stream to watch, so "the first token" is the
+	// moment the upstream's answer is in hand.
+	a.liveFirstToken()
 	// Report the alias the client asked for, not the upstream name.
 	cresp.Model = a.creq.Model
 
@@ -555,6 +601,9 @@ func (a *attempt) streamResponse(w http.ResponseWriter, r *http.Request, resp *h
 		// is inspected, and the event is passed on untouched.
 		if isContent(ev) {
 			a.tel.ContentToken()
+			a.liveFirstToken()
+		} else if ev.Type == canonical.EventUsage && ev.Usage != nil {
+			a.liveProgress(ev.Usage.OutputTokens)
 		}
 		// Report the alias the client asked for, not the upstream name, so a
 		// streamed reply matches a buffered one.
